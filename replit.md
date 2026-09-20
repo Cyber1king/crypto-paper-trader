@@ -1,6 +1,6 @@
-# [Project name]
+# Crypto Paper Lab
 
-_Replace the heading above with the project's name, and this line with one sentence describing what this app does for users._
+A paper-only BTC/USDT market research dashboard and Python strategy engine for learning, simulation, and performance review.
 
 ## Run & Operate
 
@@ -30,7 +30,9 @@ _Populate as you build — non-obvious choices a reader couldn't infer from the 
 
 ## Product
 
-_Describe the high-level user-facing capabilities of this app once they exist._
+- Analyze historical BTC/USDT OHLCV data with basic trend, support/resistance, breakout, and retest logic.
+- Generate research signals and simulated trades only; never connect to exchange accounts or execute financial transactions.
+- Review a paper trade journal and basic performance statistics.
 
 ## User preferences
 

@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "Crypto Paper Lab"
+description = "A learning and research dashboard for analyzing BTC/USDT historical OHLCV data, generating paper-trading signals, simulating trades, reviewing a trade journal, and measuring basic strategy performance without exchange account access or real transactions."
+version = "1.0.0"
+id = "artifacts/crypto-paper-lab"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 19849
+
+[services.development]
+run = "pnpm --filter @workspace/crypto-paper-lab run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/crypto-paper-lab", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/crypto-paper-lab/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "19849"
+BASE_PATH = "/"
