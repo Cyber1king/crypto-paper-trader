@@ -60,7 +60,23 @@ class PaperBroker:
         trade.exit_price = price
         trade.exit_time = timestamp
 
-        self.cash += trade.pnl or 0
+        gross_pnl = trade.pnl or 0.0
+
+        entry_value = trade.entry_price * trade.quantity
+        exit_value = trade.exit_price * trade.quantity
+
+        entry_fee = entry_value * self.costs.fee_rate
+        exit_fee = exit_value * self.costs.fee_rate
+
+        total_fees = entry_fee + exit_fee
+
+        slippage_cost = (
+            entry_value + exit_value
+        ) * self.costs.slippage_rate
+
+        net_pnl = gross_pnl - total_fees - slippage_cost
+
+        self.cash += net_pnl
 
         self.journal.append(trade)
         self.open_trade = None
