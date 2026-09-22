@@ -11,13 +11,11 @@ def _parse_timestamp(value: str) -> datetime:
 
     value = value.strip()
 
-    # ISO format, e.g. 2024-01-01T00:00:00Z
     if "T" in value:
         return datetime.fromisoformat(
             value.replace("Z", "+00:00")
         )
 
-    # Dataset format, e.g. 01-01-2024 00:00
     return datetime.strptime(
         value,
         "%d-%m-%Y %H:%M",
@@ -38,13 +36,13 @@ def load_ohlcv_csv(path: str | Path) -> list[Candle]:
         if reader.fieldnames is None:
             raise ValueError("OHLCV file has no header")
 
-        fields = {
-            field.strip().lower()
+        # Map lowercase names to the actual CSV column names.
+        columns = {
+            field.strip().lower(): field
             for field in reader.fieldnames
         }
 
         required = {
-            "date",
             "open",
             "high",
             "low",
@@ -52,23 +50,19 @@ def load_ohlcv_csv(path: str | Path) -> list[Candle]:
             "volume",
         }
 
-        required_timestamp = {
-            "timestamp",
-            "open",
-            "high",
-            "low",
-            "close",
-            "volume",
-        }
-
-        if required_timestamp.issubset(fields):
-            timestamp_column = "timestamp"
-        elif required.issubset(fields):
-            timestamp_column = "date"
+        if "timestamp" in columns:
+            timestamp_column = columns["timestamp"]
+        elif "date" in columns:
+            timestamp_column = columns["date"]
         else:
             raise ValueError(
-                "CSV must contain timestamp/date, open, high, "
-                "low, close, and volume columns"
+                "CSV must contain a timestamp or date column"
+            )
+
+        if not required.issubset(columns):
+            raise ValueError(
+                "CSV must contain open, high, low, close, "
+                "and volume columns"
             )
 
         for row in reader:
@@ -77,11 +71,11 @@ def load_ohlcv_csv(path: str | Path) -> list[Candle]:
                     timestamp=_parse_timestamp(
                         row[timestamp_column]
                     ),
-                    open=float(row["open"]),
-                    high=float(row["high"]),
-                    low=float(row["low"]),
-                    close=float(row["close"]),
-                    volume=float(row["volume"]),
+                    open=float(row[columns["open"]]),
+                    high=float(row[columns["high"]]),
+                    low=float(row[columns["low"]]),
+                    close=float(row[columns["close"]]),
+                    volume=float(row[columns["volume"]]),
                 )
             )
 
