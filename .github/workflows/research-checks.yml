@@ -1,0 +1,45 @@
+name: Research Engine Checks
+
+on:
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: research_engine
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Run tests
+        run: pytest
+
+      - name: Validate BTCUSDT dataset
+        run: |
+          python - <<'PY'
+          from crypto_paper_lab.dataset import load_dataset, validate_dataset
+
+          path = "data/BTCUSDT_1h_Cleaned (1).csv"
+
+          candles, summary = load_dataset(path)
+          validate_dataset(candles)
+
+          print(f"Candles: {summary.candles}")
+          print(f"Start: {summary.start}")
+          print(f"End: {summary.end}")
+          print("Dataset validation: PASS")
+          PY
