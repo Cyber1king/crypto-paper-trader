@@ -7,13 +7,21 @@ def performance(
     trades: Sequence[PaperTrade],
     starting_balance: float = 10_000.0,
 ) -> dict[str, float | int]:
-    """Calculate basic performance statistics for closed paper trades."""
+    """Calculate performance statistics from closed paper trades."""
 
     if starting_balance <= 0:
         raise ValueError("starting balance must be positive")
 
-    closed = [trade for trade in trades if trade.pnl is not None]
-    pnls = [float(trade.pnl) for trade in closed]
+    closed = [
+        trade
+        for trade in trades
+        if trade.net_pnl is not None
+    ]
+
+    pnls = [
+        float(trade.net_pnl)
+        for trade in closed
+    ]
 
     wins = [pnl for pnl in pnls if pnl > 0]
     losses = [pnl for pnl in pnls if pnl < 0]
@@ -32,7 +40,9 @@ def performance(
             peak_balance = balance
 
         if peak_balance > 0:
-            drawdown = (peak_balance - balance) / peak_balance
+            drawdown = (
+                peak_balance - balance
+            ) / peak_balance
 
             if drawdown > max_drawdown:
                 max_drawdown = drawdown
@@ -40,7 +50,11 @@ def performance(
     return {
         "trades": len(closed),
         "net_pnl": sum(pnls),
-        "win_rate": len(wins) / len(closed) if closed else 0.0,
+        "win_rate": (
+            len(wins) / len(closed)
+            if closed
+            else 0.0
+        ),
         "profit_factor": (
             gross_profit / gross_loss
             if gross_loss
