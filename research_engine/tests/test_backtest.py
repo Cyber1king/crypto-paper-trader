@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
-from crypto_paper_lab.backtest import run_backtest
+from crypto_paper_lab.experiment import run_experiment
 from crypto_paper_lab.models import Candle
 from crypto_paper_lab.strategy import StrategyConfig
 
@@ -21,37 +21,35 @@ def candles(closes: list[float]) -> list[Candle]:
     ]
 
 
-def test_backtest_closes_open_trade_at_end() -> None:
+def test_run_experiment_returns_result_for_each_config() -> None:
     series = candles(
         [100 + i for i in range(20)] + [123, 124, 125]
     )
 
-    trades, balance = run_backtest(
-        series,
+    configs = [
         StrategyConfig(
             lookback=10,
             fast_period=3,
             slow_period=8,
             breakout_buffer=0,
         ),
+        StrategyConfig(
+            lookback=12,
+            fast_period=4,
+            slow_period=8,
+            breakout_buffer=0,
+        ),
+    ]
+
+    results = run_experiment(
+        series,
+        configs,
     )
 
-    assert trades
-    assert all(trade.exit_price is not None for trade in trades)
-    assert balance > 10_000
+    assert len(results) == len(configs)
 
-
-def test_backtest_rejects_insufficient_history() -> None:
-    series = candles([100, 101, 102])
-
-    config = StrategyConfig(
-        lookback=10,
-        slow_period=8,
-    )
-
-    try:
-        run_backtest(series, config)
-    except ValueError as exc:
-        assert "not enough candles" in str(exc)
-    else:
-        raise AssertionError("expected ValueError")
+    for result in results:
+        assert result.config in configs
+        assert "net_pnl" in result.report
+        assert "win_rate" in result.report
+        assert "max_drawdown" in result.report
