@@ -35,10 +35,28 @@ class PaperTrade:
     exit_time: datetime | None = None
     exit_price: float | None = None
     reason: str = ""
+    costs: float = 0.0
 
     @property
     def pnl(self) -> float | None:
+        """Return gross P&L before trading costs."""
+
         if self.exit_price is None:
             return None
+
         direction = 1 if self.side == "long" else -1
-        return (self.exit_price - self.entry_price) * self.quantity * direction
+
+        return (
+            (self.exit_price - self.entry_price)
+            * self.quantity
+            * direction
+        )
+
+    @property
+    def net_pnl(self) -> float | None:
+        """Return P&L after trading costs."""
+
+        if self.pnl is None:
+            return None
+
+        return self.pnl - self.costs
