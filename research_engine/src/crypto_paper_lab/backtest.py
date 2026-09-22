@@ -1,64 +1,68 @@
-from datetime import datetime, timedelta, timezone
+from collections.abc import Sequence
 
-from crypto_paper_lab.backtest import run_backtest
-from crypto_paper_lab.models import Candle
-from crypto_paper_lab.strategy import StrategyConfig
+from .models import Candle
+from .results import BacktestResult
+from .simulator import PaperBroker
+from .strategy import StrategyConfig, analyze
 
 
-def candles(closes: list[float]) -> list[Candle]:
-    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+def run_backtest(
+    candles: Sequence[Candle],
+    config: StrategyConfig = StrategyConfig(),
+    starting_balance: float = 10_000.0,
+    risk_fraction: float = 0.01,
+) -> BacktestResult:
+    """Run a paper-only historical strategy simulation."""
 
-    return [
-        Candle(
-            timestamp=start + timedelta(hours=i),
-            open=value - 0.5,
-            high=value + 1,
-            low=value - 1,
-            close=value,
-            volume=10,
+    minimum_history = max(
+        config.lookback + 1,
+        config.slow_period,
+    )
+
+    if len(candles) < minimum_history:
+        raise ValueError(
+            "not enough candles for configured backtest"
         )
-        for i, value in enumerate(closes)
-    ]
 
+    broker = PaperBroker(starting_balance)
 
-def test_backtest_closes_open_trade_at_end() -> None:
-    series = candles(
-        [100 + i for i in range(20)] + [123, 124, 125]
-    )
+    for index in range(minimum_history, len(candles)):
+        current = candles[index]
 
-    result = run_backtest(
-        series,
-        StrategyConfig(
-            lookback=10,
-            fast_period=3,
-            slow_period=8,
-            breakout_buffer=0,
-        ),
-    )
-
-    assert result.total_trades > 0
-    assert result.trades
-    assert all(
-        trade.exit_price is not None
-        for trade in result.trades
-    )
-    assert result.ending_balance > 10_000
-    assert result.net_pnl > 0
-
-
-def test_backtest_rejects_insufficient_history() -> None:
-    series = candles([100, 101, 102])
-
-    config = StrategyConfig(
-        lookback=10,
-        slow_period=8,
-    )
-
-    try:
-        run_backtest(series, config)
-    except ValueError as exc:
-        assert "not enough candles" in str(exc)
-    else:
-        raise AssertionError(
-            "expected ValueError"
+        signal = analyze(
+            candles[: index + 1],
+            config,
         )
+
+        if broker.open_trade is not None:
+            if (
+                signal.side in {"long", "short"}
+                and signal.side != broker.open_trade.side
+            ):
+                broker.close(
+                    current.close,
+                    current.timestamp,
+                )
+
+        if (
+            broker.open_trade is None
+            and signal.side in {"long", "short"}
+        ):
+            broker.open_from_signal(
+                signal,
+                risk_fraction=risk_fraction,
+            )
+
+    if broker.open_trade is not None:
+        last = candles[-1]
+
+        broker.close(
+            last.close,
+            last.timestamp,
+        )
+
+    return BacktestResult(
+        trades=broker.journal,
+        starting_balance=starting_balance,
+        ending_balance=broker.cash,
+    )
