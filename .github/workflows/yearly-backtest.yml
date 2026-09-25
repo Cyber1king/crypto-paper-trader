@@ -1,0 +1,74 @@
+name: Yearly Backtest
+
+on:
+  workflow_dispatch:
+
+jobs:
+  yearly-backtest:
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: research_engine
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Run yearly BTCUSDT backtest
+        run: |
+          python - <<'PY'
+          from crypto_paper_lab.data import load_ohlcv_csv
+          from crypto_paper_lab.dataset import validate_dataset
+          from crypto_paper_lab.strategy import StrategyConfig
+          from crypto_paper_lab.yearly import run_yearly_backtests
+
+          path = "data/BTCUSDT_1h_Cleaned (1).csv"
+
+          candles = load_ohlcv_csv(path)
+          validate_dataset(candles)
+
+          config = StrategyConfig(
+              asset="BTC/USDT",
+              timeframe="1h",
+              lookback=20,
+              fast_period=5,
+              slow_period=12,
+              breakout_buffer=0.001,
+              retest_tolerance=0.002,
+          )
+
+          results = run_yearly_backtests(
+              candles,
+              config=config,
+              starting_balance=10_000.0,
+              risk_fraction=0.01,
+          )
+
+          print("")
+          print("===== YEARLY BACKTEST =====")
+
+          for year, report in results.items():
+              print("")
+              print(f"===== {year} =====")
+              print(f"Trades: {report['trades']}")
+              print(f"Net P&L: {report['net_pnl']:.2f}")
+              print(f"Win Rate: {report['win_rate']:.2%}")
+              print(f"Profit Factor: {report['profit_factor']:.4f}")
+              print(f"Average P&L: {report['average_pnl']:.2f}")
+              print(f"Max Drawdown: {report['max_drawdown']:.2%}")
+              print(f"Ending Balance: {report['ending_balance']:.2f}")
+
+          print("")
+          print("==========================")
+          PY
