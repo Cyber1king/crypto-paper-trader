@@ -1,3 +1,4 @@
+
 from datetime import datetime, timezone
 
 import pytest
@@ -59,3 +60,50 @@ def test_trading_costs_can_be_configured() -> None:
 
     assert broker.costs.fee_rate == pytest.approx(0.001)
     assert broker.costs.slippage_rate == pytest.approx(0.0005)
+
+
+def test_paper_broker_deducts_fees_and_slippage() -> None:
+    costs = TradingCosts(
+        fee_rate=0.001,
+        slippage_rate=0.0005,
+    )
+    broker = PaperBroker(10_000, costs=costs)
+
+    broker.open_from_signal(
+        signal(),
+        risk_fraction=0.1,
+    )
+
+    trade = broker.close(
+        110,
+        datetime.now(timezone.utc),
+    )
+
+    assert trade.pnl == pytest.approx(100)
+    assert trade.costs == pytest.approx(3.15)
+    assert trade.net_pnl == pytest.approx(96.85)
+    assert broker.cash == pytest.approx(10_096.85)
+
+
+def test_zero_costs_preserve_gross_pnl() -> None:
+    broker = PaperBroker(
+        10_000,
+        costs=TradingCosts(
+            fee_rate=0,
+            slippage_rate=0,
+        ),
+    )
+
+    broker.open_from_signal(
+        signal(),
+        risk_fraction=0.1,
+    )
+
+    trade = broker.close(
+        110,
+        datetime.now(timezone.utc),
+    )
+
+    assert trade.pnl == pytest.approx(100)
+    assert trade.costs == pytest.approx(0)
+    assert trade.net_pnl == pytest.approx(100)
