@@ -21,16 +21,19 @@ def analyze(
     candles: Sequence[Candle],
     config: StrategyConfig = StrategyConfig(),
 ) -> Signal:
-    if len(candles) < max(
-        config.lookback + 1,
-        config.slow_period,
-    ):
+    minimum = max(config.lookback + 2, config.slow_period)
+
+    if len(candles) < minimum:
         raise ValueError(
             "not enough candles for configured strategy"
         )
 
     current = candles[-1]
-    history = candles[:-1]
+    previous = candles[-2]
+
+    # Calculate levels without including the previous
+    # or current candle.
+    history = candles[:-2]
 
     support, resistance = support_resistance(
         history,
@@ -43,6 +46,33 @@ def analyze(
         config.slow_period,
     )
 
+    # Check whether the previous candle broke a level.
+    previous_broke_up = (
+        previous.close
+        > resistance * (1 + config.breakout_buffer)
+    )
+
+    previous_broke_down = (
+        previous.close
+        < support * (1 - config.breakout_buffer)
+    )
+
+    # Check whether the current candle retested that level.
+    retest_up = (
+        previous_broke_up
+        and abs(current.low - resistance) / resistance
+        <= config.retest_tolerance
+        and current.close >= resistance
+    )
+
+    retest_down = (
+        previous_broke_down
+        and abs(current.high - support) / support
+        <= config.retest_tolerance
+        and current.close <= support
+    )
+
+    # Check for a new breakout on the current candle.
     broke_up = (
         current.close
         > resistance * (1 + config.breakout_buffer)
@@ -51,22 +81,6 @@ def analyze(
     broke_down = (
         current.close
         < support * (1 - config.breakout_buffer)
-    )
-
-    previous = history[-1]
-
-    retest_up = (
-        previous.close > resistance
-        and abs(current.low - resistance) / resistance
-        <= config.retest_tolerance
-        and current.close >= resistance
-    )
-
-    retest_down = (
-        previous.close < support
-        and abs(current.high - support) / support
-        <= config.retest_tolerance
-        and current.close <= support
     )
 
     if market_trend == "up" and retest_up:
