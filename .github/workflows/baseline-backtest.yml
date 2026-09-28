@@ -1,3 +1,4 @@
+
 name: Baseline Backtest
 
 on:
@@ -33,6 +34,7 @@ jobs:
           from crypto_paper_lab.backtest import run_backtest
           from crypto_paper_lab.report import create_report
           from crypto_paper_lab.strategy import StrategyConfig
+          from crypto_paper_lab.analysis import analyze_trade_directions
 
           path = "data/BTCUSDT_1h_Cleaned (1).csv"
 
@@ -57,13 +59,13 @@ jobs:
           )
 
           report = create_report(result)
+          directions = analyze_trade_directions(result.trades)
 
           print("")
           print("===== BASELINE BACKTEST =====")
           print(f"Candles: {len(candles)}")
           print(f"Start: {candles[0].timestamp}")
           print(f"End: {candles[-1].timestamp}")
-          print("")
           print(f"Trades: {report['trades']}")
           print(f"Net P&L: {report['net_pnl']:.2f}")
           print(f"Win Rate: {report['win_rate']:.2%}")
@@ -71,5 +73,19 @@ jobs:
           print(f"Average P&L: {report['average_pnl']:.2f}")
           print(f"Max Drawdown: {report['max_drawdown']:.2%}")
           print(f"Ending Balance: {report['ending_balance']:.2f}")
-          print("=============================")
+
+          print("")
+          print("===== LONG VS SHORT =====")
+
+          for side, stats in directions.items():
+              print("")
+              print(f"===== {side.upper()} =====")
+              print(f"Trades: {stats['trades']}")
+              print(f"Net P&L: {stats['net_pnl']:.2f}")
+              print(f"Win Rate: {stats['win_rate']:.2%}")
+              print(f"Profit Factor: {stats['profit_factor']:.4f}")
+              print(f"Average P&L: {stats['average_pnl']:.2f}")
+
+          print("")
+          print("==========================")
           PY
