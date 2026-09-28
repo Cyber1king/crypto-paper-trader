@@ -1,6 +1,39 @@
+
 from collections.abc import Sequence
 
 from .models import PaperTrade
+
+
+def _summarize(trades: list[PaperTrade]) -> dict[str, float | int]:
+    """Calculate statistics for a group of closed trades."""
+
+    pnls = [
+        float(trade.net_pnl)
+        for trade in trades
+        if trade.net_pnl is not None
+    ]
+
+    wins = [pnl for pnl in pnls if pnl > 0]
+    losses = [pnl for pnl in pnls if pnl < 0]
+
+    gross_profit = sum(wins)
+    gross_loss = abs(sum(losses))
+
+    return {
+        "trades": len(pnls),
+        "net_pnl": sum(pnls),
+        "win_rate": len(wins) / len(pnls) if pnls else 0.0,
+        "profit_factor": (
+            gross_profit / gross_loss
+            if gross_loss
+            else float("inf")
+        ),
+        "average_pnl": (
+            sum(pnls) / len(pnls)
+            if pnls
+            else 0.0
+        ),
+    }
 
 
 def analyze_trade_directions(
@@ -8,51 +41,40 @@ def analyze_trade_directions(
 ) -> dict[str, dict[str, float | int]]:
     """Summarize paper-trade performance by direction."""
 
-    results: dict[str, dict[str, float | int]] = {}
-
-    for side in ("long", "short"):
-        side_trades = [
-            trade
-            for trade in trades
+    return {
+        side: _summarize([
+            trade for trade in trades
             if trade.side == side and trade.net_pnl is not None
-        ]
+        ])
+        for side in ("long", "short")
+    }
 
-        pnls = [
-            float(trade.net_pnl)
-            for trade in side_trades
-        ]
 
-        wins = [
-            pnl for pnl in pnls
-            if pnl > 0
-        ]
+def analyze_trade_signals(
+    trades: Sequence[PaperTrade],
+) -> dict[str, dict[str, float | int]]:
+    """Summarize performance by breakout or retest signal."""
 
-        losses = [
-            pnl for pnl in pnls
-            if pnl < 0
-        ]
+    groups = {
+        "breakout": [],
+        "retest": [],
+        "other": [],
+    }
 
-        gross_profit = sum(wins)
-        gross_loss = abs(sum(losses))
+    for trade in trades:
+        if trade.net_pnl is None:
+            continue
 
-        results[side] = {
-            "trades": len(pnls),
-            "net_pnl": sum(pnls),
-            "win_rate": (
-                len(wins) / len(pnls)
-                if pnls
-                else 0.0
-            ),
-            "profit_factor": (
-                gross_profit / gross_loss
-                if gross_loss
-                else float("inf")
-            ),
-            "average_pnl": (
-                sum(pnls) / len(pnls)
-                if pnls
-                else 0.0
-            ),
-        }
+        reason = trade.reason.lower()
 
-    return results
+        if "breakout" in reason or "breakdown" in reason:
+            groups["breakout"].append(trade)
+        elif "retest" in reason:
+            groups["retest"].append(trade)
+        else:
+            groups["other"].append(trade)
+
+    return {
+        name: _summarize(group)
+        for name, group in groups.items()
+    }
