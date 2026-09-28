@@ -34,7 +34,10 @@ jobs:
           from crypto_paper_lab.backtest import run_backtest
           from crypto_paper_lab.report import create_report
           from crypto_paper_lab.strategy import StrategyConfig
-          from crypto_paper_lab.analysis import analyze_trade_directions
+          from crypto_paper_lab.analysis import (
+              analyze_trade_directions,
+              analyze_trade_signals,
+          )
 
           path = "data/BTCUSDT_1h_Cleaned (1).csv"
 
@@ -60,6 +63,7 @@ jobs:
 
           report = create_report(result)
           directions = analyze_trade_directions(result.trades)
+          signals = analyze_trade_signals(result.trades)
 
           print("")
           print("===== BASELINE BACKTEST =====")
@@ -80,6 +84,18 @@ jobs:
           for side, stats in directions.items():
               print("")
               print(f"===== {side.upper()} =====")
+              print(f"Trades: {stats['trades']}")
+              print(f"Net P&L: {stats['net_pnl']:.2f}")
+              print(f"Win Rate: {stats['win_rate']:.2%}")
+              print(f"Profit Factor: {stats['profit_factor']:.4f}")
+              print(f"Average P&L: {stats['average_pnl']:.2f}")
+
+          print("")
+          print("===== BREAKOUT VS RETEST =====")
+
+          for name, stats in signals.items():
+              print("")
+              print(f"===== {name.upper()} =====")
               print(f"Trades: {stats['trades']}")
               print(f"Net P&L: {stats['net_pnl']:.2f}")
               print(f"Win Rate: {stats['win_rate']:.2%}")
