@@ -1,0 +1,49 @@
+ACQUISITION REPORT
+==============================================================================
+
+source            : data\oos\raw\extracted\BTCUSDT-1h-2026-05.csv
+source sha256     : 9f87e717a3b713ba6861c947a23fb8428c55e168ad42490f3830670251ec7e6b
+detected format   : binance_klines
+rows seen         : 744
+rows accepted     : 744
+first timestamp   : 2026-05-01 00:00:00
+last timestamp    : 2026-05-31 23:00:00
+candle count      : 744
+price range       : 72512.49 .. 82850.0
+total volume      : 425331.03039
+invalid rows      : 0
+duplicate stamps  : 0
+out-of-order rows : 0
+missing hours     : 0
+overlapping rows  : 0
+errors            : 0
+note              : binance spot timestamps are microseconds from 2025-01-01 and milliseconds before; epoch units were inferred per row
+output written    : True
+output path       : data\oos\binance_spot_BTCUSDT_1h_202605.csv
+output sha256     : 725a47aaf2cc51124ac0bc27697222d266577642cc927473cfbe6c65af9b5afc
+VERDICT           : ACCEPTED
+
+INVALID ROWS (line, reason) (0)
+------------------------------------------------------------------------------
+  none
+
+DUPLICATE TIMESTAMPS (timestamp, count) (0)
+------------------------------------------------------------------------------
+  none
+
+OUT-OF-ORDER ROWS (line, timestamp) (0)
+------------------------------------------------------------------------------
+  none
+
+MISSING HOURLY INTERVALS (previous, next) (0)
+------------------------------------------------------------------------------
+  none
+
+OVERLAPPING WITH 2024-2025 RESEARCH (0)
+------------------------------------------------------------------------------
+  none
+
+ERRORS (0)
+------------------------------------------------------------------------------
+  none
+

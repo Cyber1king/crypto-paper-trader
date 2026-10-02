@@ -1,0 +1,48 @@
+ACQUISITION REPORT
+==============================================================================
+
+source            : data\oos\_revalidate_input.csv
+source sha256     : 918153fde98e39c03eef8a7b82a2861adfdc98a080c8810e371869eb3ea22437
+detected format   : project_native
+rows seen         : 5832
+rows accepted     : 5832
+first timestamp   : 2026-01-01 00:00:00
+last timestamp    : 2026-08-31 23:00:00
+candle count      : 5832
+price range       : 57800.19 .. 97924.49
+total volume      : 4535110.80693
+invalid rows      : 0
+duplicate stamps  : 0
+out-of-order rows : 0
+missing hours     : 0
+overlapping rows  : 0
+errors            : 0
+output written    : True
+output path       : data\oos\_revalidate_output.csv
+output sha256     : 918153fde98e39c03eef8a7b82a2861adfdc98a080c8810e371869eb3ea22437
+VERDICT           : ACCEPTED
+
+INVALID ROWS (line, reason) (0)
+------------------------------------------------------------------------------
+  none
+
+DUPLICATE TIMESTAMPS (timestamp, count) (0)
+------------------------------------------------------------------------------
+  none
+
+OUT-OF-ORDER ROWS (line, timestamp) (0)
+------------------------------------------------------------------------------
+  none
+
+MISSING HOURLY INTERVALS (previous, next) (0)
+------------------------------------------------------------------------------
+  none
+
+OVERLAPPING WITH 2024-2025 RESEARCH (0)
+------------------------------------------------------------------------------
+  none
+
+ERRORS (0)
+------------------------------------------------------------------------------
+  none
+

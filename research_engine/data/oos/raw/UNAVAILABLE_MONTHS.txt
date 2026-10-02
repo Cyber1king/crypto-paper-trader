@@ -1,0 +1,17 @@
+Monthly archives that were probed and NOT available
+==============================================================
+Probed on: 2026-10-01
+Base URL: https://data.binance.vision/data/spot/monthly/klines/BTCUSDT/1h
+
+  BTCUSDT-1h-2026-09.zip  -> HTTP 404 Not Found
+  BTCUSDT-1h-2026-10.zip  -> HTTP 404 Not Found
+  BTCUSDT-1h-2026-11.zip  -> HTTP 404 Not Found
+  BTCUSDT-1h-2026-12.zip  -> HTTP 404 Not Found
+
+Reason: Binance Vision publishes a monthly archive on the first
+Monday of the following month. On the retrieval date the first
+Monday of October 2026 (5 October) had not yet occurred, so the
+September 2026 monthly archive was not published. October 2026 was
+also still in progress and December 2026 is in the future.
+
+No data was substituted, estimated or synthesised for these months.

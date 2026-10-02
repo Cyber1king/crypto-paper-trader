@@ -1,0 +1,54 @@
+SOURCE PROVENANCE - Binance Vision public market data
+==============================================================
+
+Source              : Binance Vision (data.binance.vision)
+Official URL        : https://data.binance.vision/data/spot/monthly/klines/BTCUSDT/1h/BTCUSDT-1h-2026-07.zip
+Checksum URL        : https://data.binance.vision/data/spot/monthly/klines/BTCUSDT/1h/BTCUSDT-1h-2026-07.zip.CHECKSUM
+Archive filename    : BTCUSDT-1h-2026-07.zip
+Archive bytes       : 43238
+Retrieval date      : 2026-10-01
+Published SHA-256   : ec98553c10acdbf3f210c55045614e8d3daf616e407c36718269361b1e972b16
+Local SHA-256       : ec98553c10acdbf3f210c55045614e8d3daf616e407c36718269361b1e972b16
+Checksum verified   : True
+
+Market              : BTC/USDT spot (not futures)
+Data type           : klines (candles)
+Interval            : 1h
+Covered date range  : 2026-07-01 .. 2026-07-last day
+Rows in archive     : 744
+First open time     : 1782864000000000 (epoch microseconds)
+Last  open time     : 1785538800000000 (epoch microseconds)
+
+PARSING / NORMALISATION NOTES
+--------------------------------------------------------------
+  * Epoch unit inferred per row as microseconds. Binance Vision
+    publishes SPOT timestamps in microseconds from 2025-01-01
+    onward and milliseconds before that.
+  * Source layout has no header row, so the names of the six
+    ignored trailing columns cannot be read from the file.
+    They are positional only: close time, quote asset volume,
+    number of trades, taker buy base asset volume, taker buy
+    quote asset volume, ignore.
+  * Normalisation is representation-only: epoch converted to
+    dd-mm-yyyy HH:MM and the file reduced to the six canonical
+    columns. No price, volume or timestamp value was altered.
+  * No gap was filled, no price interpolated, no candle
+    synthesised.
+
+DERIVED FILES
+--------------------------------------------------------------
+  normalised csv    : data/oos/binance_spot_BTCUSDT_1h_202607.csv
+  normalised sha256 : 9d46773a798094b1ec9f7b89025bfd609039cf5bf4c2be6eb1c767e93c48352a
+  validation report : data/oos/binance_spot_BTCUSDT_1h_202607.csv.report.txt
+
+LICENCE
+--------------------------------------------------------------
+  Binance Vision data is provided under CC BY-NC-SA 4.0 together
+  with the Binance Vision Dataset Terms. Permitted uses include
+  academic research, non-monetised open educational projects and
+  algorithmic historical backtesting for personal non-production
+  research. Commercial use is excluded. Attribution to Binance
+  Vision is required on redistribution.
+
+This sidecar is a local record created by this project. It is not
+issued by Binance.
