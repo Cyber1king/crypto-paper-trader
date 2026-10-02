@@ -9,13 +9,25 @@ def simple_moving_average(values: Sequence[float], period: int) -> float:
     return sum(values[-period:]) / period
 
 
-def trend(candles: Sequence[Candle], fast: int = 5, slow: int = 12) -> str:
+def trend(
+    candles: Sequence[Candle],
+    fast: int = 5,
+    slow: int = 12,
+    strength: float = 0.001,
+) -> str:
+    """Classify trend from a fast/slow simple-moving-average pair.
+
+    ``strength`` is the minimum relative separation between the two averages
+    required before a direction is reported. It is expressed as a fraction of
+    the slow average. The default reproduces the original V1 behaviour.
+    """
+
     closes = [c.close for c in candles]
     if len(closes) < slow:
         return "sideways"
     fast_ma = simple_moving_average(closes, fast)
     slow_ma = simple_moving_average(closes, slow)
-    tolerance = slow_ma * 0.001
+    tolerance = slow_ma * strength
     if fast_ma > slow_ma + tolerance:
         return "up"
     if fast_ma < slow_ma - tolerance:

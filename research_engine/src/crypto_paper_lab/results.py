@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from collections.abc import Sequence
 
 from .models import PaperTrade
@@ -11,6 +11,7 @@ class BacktestResult:
     trades: Sequence[PaperTrade]
     starting_balance: float
     ending_balance: float
+    exit_counts: dict[str, int] = field(default_factory=dict)
 
     @property
     def total_trades(self) -> int:

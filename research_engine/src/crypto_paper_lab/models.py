@@ -36,6 +36,8 @@ class PaperTrade:
     exit_price: float | None = None
     reason: str = ""
     costs: float = 0.0
+    exit_reason: str = ""
+    bars_held: int = 0
 
     @property
     def pnl(self) -> float | None:
