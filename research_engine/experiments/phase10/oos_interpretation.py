@@ -17,6 +17,7 @@ from crypto_paper_lab.backtest import run_backtest  # noqa: E402
 from crypto_paper_lab.costs import TradingCosts  # noqa: E402
 from crypto_paper_lab.data import load_ohlcv_csv  # noqa: E402
 from crypto_paper_lab.dataset import validate_dataset  # noqa: E402
+from crypto_paper_lab.stats import total_friction  # noqa: E402
 from crypto_paper_lab.strategy import StrategyConfig  # noqa: E402
 
 OOS = "data/oos/binance_spot_BTCUSDT_1h_202601-202608.csv"
@@ -64,7 +65,7 @@ def main() -> int:
                            evaluation_start=WARMUP)
         nets = [t.net_pnl for t in res.trades if t.net_pnl is not None]
         gross = [t.pnl for t in res.trades if t.pnl is not None]
-        costs = sum(t.costs for t in res.trades)
+        costs = total_friction(res.trades)
 
         sig_net = significance(nets)
         sig_gross = significance(gross)
@@ -116,7 +117,7 @@ def main() -> int:
         trades = by_month[month]
         n = sum(t.net_pnl or 0.0 for t in trades)
         g = sum(t.pnl or 0.0 for t in trades)
-        c = sum(t.costs for t in trades)
+        c = total_friction(trades)
         print(f"  {month:9s} {len(trades):7d} {n:+9.2f} {g:+9.2f} {c:8.2f}")
 
     # ---- market regime comparison --------------------------------------

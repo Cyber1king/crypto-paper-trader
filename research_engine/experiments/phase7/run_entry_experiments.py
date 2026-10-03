@@ -19,6 +19,7 @@ from crypto_paper_lab.backtest import run_backtest
 from crypto_paper_lab.costs import TradingCosts
 from crypto_paper_lab.data import load_ohlcv_csv
 from crypto_paper_lab.dataset import validate_dataset
+from crypto_paper_lab.stats import total_friction
 from crypto_paper_lab.strategy import StrategyConfig
 
 DATASET = "data/BTCUSDT_1h_Cleaned (1).csv"
@@ -117,7 +118,7 @@ def metrics(result):
         "max_drawdown": round(mdd * 100, 3),
         "ending_balance": round(result.ending_balance, 2),
         "gross_pnl": round(sum(t.pnl or 0.0 for t in result.trades), 2),
-        "total_costs": round(sum(t.costs for t in result.trades), 2),
+        "total_costs": round(total_friction(result.trades), 2),
         "n_long": len(longs),
         "n_short": len(shorts),
         "long_net": gsum(longs),

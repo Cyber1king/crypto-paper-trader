@@ -48,6 +48,12 @@ def build_row(trade, meta, exit_kind, entry_i, exit_i):
         "exit_price": trade.exit_price,
         "qty": trade.quantity,
         "costs": trade.costs,
+          # "costs" above is the amount deducted from gross, which keeps the
+          # per-trade identity gross - costs == net. Under the default
+          # cost_deduction model it is also the total friction; under
+          # fill_price it is fees only, so total_friction is reported
+          # separately rather than overwriting the reconciled figure.
+          "total_friction": trade.total_friction,
         "gross": trade.pnl,
         "net": trade.net_pnl,
         "dist": dist,

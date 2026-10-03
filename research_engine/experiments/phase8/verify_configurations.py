@@ -5,6 +5,7 @@ from crypto_paper_lab.backtest import run_backtest
 from crypto_paper_lab.data import load_ohlcv_csv
 from crypto_paper_lab.dataset import validate_dataset
 from crypto_paper_lab.report import create_report
+from crypto_paper_lab.stats import total_friction
 from crypto_paper_lab.strategy import StrategyConfig
 
 candles = load_ohlcv_csv("data/BTCUSDT_1h_Cleaned (1).csv")
@@ -60,7 +61,7 @@ for label, cfg in (("baseline", StrategyConfig()), ("A2", A2)):
         print(f"  {key:18s} {exp:>12} {got:>12.6f}  {shown:>12}  {'YES' if ok else 'NO'}")
 
     gross = sum(t.pnl or 0.0 for t in result.trades)
-    costs = sum(t.costs for t in result.trades)
+    costs = total_friction(result.trades)
     print(f"  gross_pnl          {gross:12.2f}")
     print(f"  total_costs        {costs:12.2f}")
     print(f"  exits              {result.exit_counts}")

@@ -10,6 +10,7 @@ from crypto_paper_lab.backtest import run_backtest
 from crypto_paper_lab.costs import TradingCosts
 from crypto_paper_lab.data import load_ohlcv_csv
 from crypto_paper_lab.dataset import validate_dataset
+from crypto_paper_lab.stats import total_friction
 from crypto_paper_lab.strategy import StrategyConfig
 
 candles = load_ohlcv_csv("data/BTCUSDT_1h_Cleaned (1).csv")
@@ -29,7 +30,7 @@ def row(rs, label):
     print(f"  {label:26s} n={len(rs):4d} "
           f"gross={sum(gross):9.2f} gross_wr={gw / len(rs):7.2%} "
           f"net={sum(net):9.2f} net_wr={nw / len(rs):7.2%} "
-          f"costs={sum(t.costs for t in rs):8.2f} "
+          f"costs={total_friction(rs):8.2f} "
           f"worst_gross={min(gross):7.2f} best_gross={max(gross):7.2f}")
 
 

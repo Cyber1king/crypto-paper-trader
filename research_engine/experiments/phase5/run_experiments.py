@@ -14,6 +14,7 @@ from crypto_paper_lab.backtest import run_backtest
 from crypto_paper_lab.costs import TradingCosts
 from crypto_paper_lab.strategy import StrategyConfig
 from crypto_paper_lab.analysis import analyze_trade_directions, analyze_trade_signals
+from crypto_paper_lab.stats import total_friction
 
 DATASET = "data/BTCUSDT_1h_Cleaned (1).csv"
 BASE = StrategyConfig()
@@ -139,7 +140,7 @@ for split_name, subset in SPLITS.items():
         bal += x
         peak = max(peak, bal)
         mdd = max(mdd, (peak - bal) / peak)
-    total_costs = sum(t.costs for t in res.trades)
+    total_costs = total_friction(res.trades)
     print(f"  {split_name:5s} n={res.total_trades:4d}  "
           f"gross_net(0 cost)={res.ending_balance - res.starting_balance:9.2f}  "
           f"wr={len(wins) / len(nets):7.2%}  pf={gp / gl if gl else float('inf'):6.3f}  "

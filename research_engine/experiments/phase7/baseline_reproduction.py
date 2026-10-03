@@ -84,10 +84,16 @@ print(f"  BASELINE REPRODUCED: {'YES' if all_ok else 'NO -- DISCREPANCY'}")
 print()
 print("=== FEE / SLIPPAGE IN FORCE (verified from the trade journal) ===")
 costs = TradingCosts()
-total_fees = sum(t.costs for t in result.trades)
+# This figure reconciles gross P&L against net P&L below, so it must be the
+# amount actually *deducted* from gross, i.e. sum(trade.costs). Under the
+# default cost_deduction model that equals total friction. Under fill_price
+# it is fees only, because spread and slippage already sit inside the
+# recorded fill prices; using total_friction here would break the
+# gross - costs == net identity printed on the next line.
+total_deducted = sum(t.costs for t in result.trades)
 print(f"  fee_rate            : {costs.fee_rate}")
 print(f"  slippage_rate       : {costs.slippage_rate}")
-print(f"  total charged       : {total_fees:.2f}")
+print(f"  total charged       : {total_deducted:.2f}")
 print(f"  gross P&L           : {sum(t.pnl for t in result.trades):.2f}")
 print(f"  net P&L             : {sum(t.net_pnl for t in result.trades):.2f}")
-print(f"  gross - costs       : {sum(t.pnl for t in result.trades) - total_fees:.2f}")
+print(f"  gross - costs       : {sum(t.pnl for t in result.trades) - total_deducted:.2f}")

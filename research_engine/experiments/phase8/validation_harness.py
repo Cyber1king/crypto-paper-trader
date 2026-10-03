@@ -25,6 +25,7 @@ from crypto_paper_lab.costs import TradingCosts
 from crypto_paper_lab.data import load_ohlcv_csv
 from crypto_paper_lab.dataset import validate_dataset
 from crypto_paper_lab.report import create_report
+from crypto_paper_lab.stats import total_friction
 from crypto_paper_lab.strategy import StrategyConfig
 
 PHASE7_FIRST = datetime(2024, 1, 1, 0, 0)
@@ -131,7 +132,7 @@ def report_configuration(name, candles, config, boundary):
         ),
         "max_drawdown": stats["max_drawdown"] * 100,
         "ending_balance": result.ending_balance,
-        "total_costs": sum(t.costs for t in result.trades),
+        "total_costs": total_friction(result.trades),
         "gross_pnl": sum(t.pnl or 0.0 for t in result.trades),
         "avg_net_per_trade": (sum(nets) / len(nets)) if nets else 0.0,
         "longs": side_block(longs),

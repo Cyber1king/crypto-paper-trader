@@ -42,6 +42,7 @@ from datetime import datetime
 from typing import Sequence
 
 from .models import Candle, PaperTrade
+from .stats import total_friction
 
 __all__ = [
     "DrawdownResult",
@@ -448,7 +449,7 @@ def monthly_breakdown(
         group = buckets[month]
         nets = [t.net_pnl or 0.0 for t in group]
         gross = [t.pnl or 0.0 for t in group]
-        costs = sum(t.costs for t in group)
+        costs = total_friction(group)
         rows.append({
             "month": month,
             "trades": len(group),

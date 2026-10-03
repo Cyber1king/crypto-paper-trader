@@ -34,6 +34,12 @@ def _levels_breached(
     Only the high/low/close of ``bar`` are inspected. The caller is
     responsible for guaranteeing that ``bar`` closed before the decision and
     that the fill happens on a later bar.
+
+    Levels are measured from ``trade.entry_price``, which is the recorded
+    entry fill. Under the default ``cost_deduction`` model that is the raw
+    chart price; under ``fill_price`` it is the price actually paid, so the
+    stop and target are anchored to the real position rather than to the
+    reference chart price.
     """
 
     stop_hit = False
@@ -69,6 +75,16 @@ def run_backtest(
     ``costs`` is optional and defaults to the standard paper-trading costs,
     which preserves the original V1 baseline exactly. Passing
     ``TradingCosts(0, 0)`` enables a zero-cost diagnostic run.
+
+    Execution costs are supplied through ``costs``; the backtest shares the
+    single :class:`~crypto_paper_lab.simulator.PaperBroker` implementation
+    used elsewhere, so entry and exit fills, fees and slippage cannot drift
+    apart between the simulator and the backtest. The default
+    ``cost_deduction`` model records fills at the raw chart price and
+    deducts fees plus slippage from P&L. Passing
+    ``execution_model="fill_price"`` instead records the prices actually
+    paid or received, sizes each position from its real entry fill, and
+    anchors stop-loss and take-profit levels to that fill.
 
     Optional Phase 6 exit rules (``max_holding_bars``, ``stop_loss_pct``,
     ``take_profit_pct``) are all disabled by default, so the default exit

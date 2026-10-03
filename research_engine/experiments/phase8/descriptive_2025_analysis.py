@@ -14,6 +14,7 @@ from dataclasses import replace
 from crypto_paper_lab.backtest import run_backtest
 from crypto_paper_lab.data import load_ohlcv_csv
 from crypto_paper_lab.dataset import validate_dataset
+from crypto_paper_lab.stats import total_friction
 from crypto_paper_lab.strategy import StrategyConfig
 
 BASE = StrategyConfig()
@@ -105,7 +106,7 @@ def trade_profile(result):
         "win_rate": len(wins) / len(nets) if nets else 0.0,
         "profit_factor": gp / gl if gl else float("inf"),
         "gross_pnl": sum(t.pnl or 0.0 for t in trades),
-        "costs": sum(t.costs for t in trades),
+        "costs": total_friction(trades),
         "trades_per_1000_bars": len(trades) / (len(trades) and 1 or 1),
         "mean_spacing_hours": statistics.fmean(spacing) if spacing else 0.0,
         "median_bars_held": statistics.median(held) if held else 0.0,
