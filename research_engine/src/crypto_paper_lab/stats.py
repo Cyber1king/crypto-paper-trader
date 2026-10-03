@@ -1,3 +1,4 @@
+import statistics
 from collections.abc import Sequence
 
 from .models import PaperTrade
@@ -54,6 +55,33 @@ def cost_breakdown(trades: Sequence[PaperTrade]) -> dict[str, float]:
         "total_friction": total_friction(trades),
         "deducted_costs": sum(trade.costs for trade in trades),
     }
+
+
+def closed_net_pnls(trades: Sequence[PaperTrade]) -> list[float]:
+    """Net P&L of every closed trade, in journal order."""
+
+    return [
+        float(trade.net_pnl)
+        for trade in trades
+        if trade.net_pnl is not None
+    ]
+
+
+def median_pnl(trades: Sequence[PaperTrade]) -> float | None:
+    """Median net P&L per closed trade, or ``None`` when none are closed.
+
+    Added for Phase 13 window statistics, which require a median alongside the
+    mean. This is a standalone helper rather than a new key in
+    :func:`performance` so that every existing report dictionary keeps its
+    exact shape and no previously published figure can change.
+    """
+
+    values = closed_net_pnls(trades)
+
+    if not values:
+        return None
+
+    return statistics.median(values)
 
 
 def performance(
