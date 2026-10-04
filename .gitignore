@@ -57,3 +57,12 @@ __pycache__/
 # OOS data (derived, reproducible from research_engine/data/oos/raw/*.zip via
 # experiments/phase10/extract_and_normalise.py)
 /research_engine/data/oos/raw/extracted/
+
+# Environment files
+# These may hold secrets, so they are never committed. Patterns are unanchored
+# and therefore match at any depth (repo root, research_engine/, artifacts/).
+# Templates stay trackable so setup remains documented. The negation must come
+# after ".env.*", otherwise it has no effect.
+.env
+.env.*
+!.env.example

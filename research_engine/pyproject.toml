@@ -7,10 +7,19 @@ name = "crypto-paper-lab"
 version = "0.1.0"
 description = "Paper-only BTC/USDT strategy research engine"
 requires-python = ">=3.11"
-dependencies = []
+# API dependencies are pinned to the exact versions this project was built
+# and tested against, so a fresh install reproduces the verified behaviour.
+# Do not relax these to ranges without re-running the API test suite.
+dependencies = [
+    "fastapi==0.111.0",
+    "uvicorn==0.30.1",
+]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0"]
+dev = ["pytest>=8.0", "httpx==0.27.0"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
