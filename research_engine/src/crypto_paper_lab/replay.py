@@ -93,6 +93,9 @@ from .walkforward import (
 
 __all__ = [
     "AUTOMATIC_POLICY",
+    "DEFAULT_INTERVAL_MS",
+    "MAX_INTERVAL_MS",
+    "MIN_INTERVAL_MS",
     "STATE_FINISHED",
     "STATE_IDLE",
     "STATE_PAUSED",
@@ -100,7 +103,9 @@ __all__ = [
     "DatasetIdentity",
     "ExecutionIdentity",
     "ExecutionPolicy",
+    "InvalidIntervalError",
     "InvalidStartIndexError",
+    "OnDemandTicker",
     "PositionOpenError",
     "Replay",
     "ReplayError",
@@ -108,6 +113,7 @@ __all__ = [
     "ReplayState",
     "StepResult",
     "StrategyIdentity",
+    "Ticker",
     "minimum_history",
 ]
 
@@ -128,6 +134,19 @@ STATE_PAUSED = "paused"
 
 #: Cursor reached the end of the dataset. Terminal; only ``reset`` exits it.
 STATE_FINISHED = "finished"
+
+# ---------------------------------------------------------------------------
+# Auto-run pacing
+# ---------------------------------------------------------------------------
+
+#: Phase 17A section 7.5. Auto-run is paced in milliseconds between steps.
+DEFAULT_INTERVAL_MS = 1_000
+
+#: Bounds are **validated, never clamped**. Clamping would silently substitute a
+#: pace the caller did not ask for, which is exactly the kind of quiet
+#: reinterpretation this module avoids elsewhere.
+MIN_INTERVAL_MS = 100
+MAX_INTERVAL_MS = 60_000
 
 
 def minimum_history(config: StrategyConfig) -> int:
@@ -190,6 +209,12 @@ class PositionOpenError(ReplayError):
     code = "POSITION_OPEN"
 
 
+class InvalidIntervalError(ReplayError):
+    """An auto-run interval outside the permitted range was requested."""
+
+    code = "INVALID_INTERVAL"
+
+
 # ---------------------------------------------------------------------------
 # Execution policy
 # ---------------------------------------------------------------------------
@@ -224,6 +249,93 @@ class ExecutionPolicy:
 #: Reproduces ``run_backtest``: any eligible non-flat signal opens a position.
 #: The only policy that exists in Phase 17B.
 AUTOMATIC_POLICY = ExecutionPolicy(name="automatic", allow_entry=True)
+
+
+# ---------------------------------------------------------------------------
+# Auto-run pacing
+# ---------------------------------------------------------------------------
+
+
+class Ticker:
+    """Decides *when* an automatic step happens. Never decides what one does.
+
+    Phase 17A §7.4 requires auto-run to be repeated ``step()`` and nothing else
+    (invariant AR-1: "Auto-run must be implemented as repeated ``step()``, not as a
+    separate code path with its own timing"). A ticker may therefore answer exactly
+    one question - is a step due? - and must not be able to run trading logic,
+    choose a fill, or move the cursor.
+
+    Substituting a different ticker may change **pacing only, never results**.
+    That is the property the tests rely on: a ticker that fires on a schedule and
+    one that fires on command must produce byte-identical journals.
+
+    Why a seam at all, given no clock is used yet: so that adding a real
+    wall-clock driver in a later transport phase cannot require touching
+    ``Replay``, and so the lifecycle can be tested without sleeping. A test that
+    waited on real time would be a flaky test, and a flaky test is a test that
+    will eventually be ignored.
+    """
+
+    def arm(self, interval_ms: int) -> None:
+        """Begin offering ticks. Must be idempotent: arming twice offers one
+        tick per request, not two."""
+
+        raise NotImplementedError
+
+    def disarm(self) -> None:
+        """Stop offering ticks. Must be idempotent."""
+
+        raise NotImplementedError
+
+    @property
+    def armed(self) -> bool:
+        raise NotImplementedError
+
+    def take(self) -> bool:
+        """Consume at most one due tick.
+
+        Returns ``True`` when a step is due now. Must not perform trading work,
+        and must be safe to call when disarmed.
+        """
+
+        raise NotImplementedError
+
+
+class OnDemandTicker(Ticker):
+    """Default ticker: a tick is due whenever it is armed and asked for.
+
+    No wall clock, no worker, no sleeping. Two consecutive ``take()`` calls each
+    yield one tick, so *N* takes produce exactly *N* steps. That property is what
+    makes repeated ``start()`` calls provably harmless - there is no second worker
+    to create, so none can be created.
+    """
+
+    def __init__(self) -> None:
+        self._armed = False
+        self._interval_ms = DEFAULT_INTERVAL_MS
+        self.takes = 0
+
+    def arm(self, interval_ms: int) -> None:
+        self._armed = True
+        self._interval_ms = interval_ms
+
+    def disarm(self) -> None:
+        self._armed = False
+
+    @property
+    def armed(self) -> bool:
+        return self._armed
+
+    @property
+    def interval_ms(self) -> int:
+        return self._interval_ms
+
+    def take(self) -> bool:
+        if not self._armed:
+            return False
+
+        self.takes += 1
+        return True
 
 
 # ---------------------------------------------------------------------------
@@ -409,6 +521,7 @@ class Replay:
         policy: ExecutionPolicy = AUTOMATIC_POLICY,
         replay_id: str | None = None,
         dataset_sha256: str = DATASET_SHA256,
+        ticker: Ticker | None = None,
     ) -> None:
         """
         Parameters
@@ -432,6 +545,10 @@ class Replay:
             Identity hash to record. Supplied rather than computed, because a
             replay over an arbitrary series must not claim the frozen dataset's
             hash.
+        ticker:
+            Auto-run pacing. Defaults to :class:`OnDemandTicker`, which yields a
+            tick whenever it is armed and asked for, so automatic progression is
+            fully driven and therefore fully deterministic.
         """
 
         series = tuple(candles)
@@ -447,6 +564,8 @@ class Replay:
         self._replay_id = replay_id if replay_id is not None else str(uuid4())
         self._evaluation_start = evaluation_start
         self._starting_balance = starting_balance
+        self._ticker = ticker if ticker is not None else OnDemandTicker()
+        self._interval_ms = DEFAULT_INTERVAL_MS
 
         required = minimum_history(self._config)
 
@@ -516,6 +635,18 @@ class Replay:
         return self._policy
 
     @property
+    def ticker(self) -> Ticker:
+        """The pacing object. Read-only; a replay never swaps it mid-run."""
+
+        return self._ticker
+
+    @property
+    def interval_ms(self) -> int:
+        """Auto-run interval last requested by :meth:`start`."""
+
+        return self._interval_ms
+
+    @property
     def entry_index(self) -> int | None:
         """Index at which the open trade was entered, or ``None`` when flat.
 
@@ -578,12 +709,131 @@ class Replay:
 
     # -- mutation -----------------------------------------------------------
 
+    def start(self, interval_ms: int | None = None) -> ReplayState:
+        """Arm auto-run: ``idle``/``paused`` become ``running``.
+
+        Idempotent. Calling it again while already running re-arms the *same*
+        ticker rather than creating another, which is why repeated calls cannot
+        produce two steps per tick. It never advances the cursor.
+
+        Arming is also what makes auto-run driveable::
+
+            replay.start()
+            while replay.ticker.armed:
+                replay.tick()
+
+        ``armed`` goes false on :meth:`pause`, on reaching the end of the data,
+        and on :meth:`reset`, so that loop terminates on its own.
+
+        A finished replay is left finished and its ticker stays disarmed. Note
+        this is deliberately a quiet no-op rather than an exception: the Phase 17C
+        transition table specifies ``finished -> finished``. Phase 17A §21 still
+        requires the HTTP layer to answer ``409 REPLAY_FINISHED`` for this case, so
+        a transport must inspect ``state.status`` and reject. Keeping the refusal
+        in the transport rather than the engine is what lets both documents hold.
+
+        Parameters
+        ----------
+        interval_ms:
+            Requested pace. ``None`` keeps the current interval. Out of range is
+            **rejected, never clamped** (Phase 17A §7.5).
+
+        Raises
+        ------
+        InvalidIntervalError
+            If the effective interval is outside ``MIN_INTERVAL_MS``..
+            ``MAX_INTERVAL_MS``.
+        """
+
+        requested = self._interval_ms if interval_ms is None else interval_ms
+
+        if not MIN_INTERVAL_MS <= requested <= MAX_INTERVAL_MS:
+            raise InvalidIntervalError(
+                f"interval_ms must be between {MIN_INTERVAL_MS} and "
+                f"{MAX_INTERVAL_MS}, got {requested}"
+            )
+
+        if self._status == STATE_FINISHED:
+            # Terminal. Do not arm, do not restart.
+            return self.state
+
+        self._interval_ms = requested
+        self._status = STATE_RUNNING
+        self._ticker.arm(requested)
+
+        return self.state
+
+    def pause(self) -> ReplayState:
+        """Disarm auto-run: ``running`` becomes ``paused``.
+
+        Idempotent, and a no-op from ``idle`` or ``finished`` - those states are
+        returned unchanged, matching the Phase 17C transition table. As with
+        :meth:`start`, a transport is expected to answer ``409
+        INVALID_TRANSITION`` for a pause that did not change anything.
+
+        Nothing else is touched. The cursor, broker, journal, balances and signal
+        are exactly as they were, so pausing is always safe to interrupt.
+        """
+
+        if self._status == STATE_RUNNING:
+            self._status = STATE_PAUSED
+
+        self._ticker.disarm()
+
+        return self.state
+
+    def tick(self) -> StepResult | None:
+        """Perform at most one *automatic* step.
+
+        This is the auto-run entry point: it consults the ticker and, when a tick
+        is due, delegates to :meth:`step`. It therefore obeys invariant AR-1 -
+        there is no second execution path, only a second way of asking for one.
+
+        Returns ``None`` when no tick is due: not running, or already finished.
+        Returning ``None`` rather than raising is deliberate. A finished replay
+        receiving further ticks is the normal end of an auto-run, not an error;
+        the caller can stop as soon as it sees ``None``. :meth:`step` remains the
+        strict primitive and still raises when finished.
+
+        Note
+        ----
+        Ticking a replay that was never started is a **no-op returning ``None``**,
+        not an error. Callers must therefore drive auto-run on the armed flag,
+        which is what makes the loop terminate::
+
+            replay.start()
+            while replay.ticker.armed:      # False once paused or finished
+                replay.tick()
+
+        Looping on ``status != finished`` instead would spin forever when the
+        replay was never started, because a no-op tick leaves the status alone.
+        That asymmetry is intentional: auto-run is gated on being armed, not on
+        the cursor still having bars left.
+        """
+
+        if self._status != STATE_RUNNING:
+            return None
+
+        if not self._ticker.take():
+            return None
+
+        if self._status == STATE_FINISHED:
+            return None
+
+        return self._advance()
+
     def step(self) -> StepResult:
         """Advance exactly one execution bar.
 
         A transliteration of one iteration of ``backtest.py:135-205``, followed by
         the end-of-data block of ``backtest.py:207-213`` when the cursor reaches
         the end of the series.
+
+        Legal from ``idle``, ``paused`` and ``running`` (Phase 17A §7.2). From
+        ``running`` it interleaves with the ticker and leaves the status
+        ``running``. It is also the only way for a non-running replay to advance:
+        pausing does not prevent a deliberate manual step, which is what makes a
+        paused replay still explorable.
 
         Raises
         ------
@@ -595,6 +845,16 @@ class Replay:
             raise ReplayFinishedError(
                 "replay has reached the end of the dataset; reset to run again"
             )
+
+        return self._advance()
+
+    def _advance(self) -> StepResult:
+        """The single-step body, shared by :meth:`step` and :meth:`tick`.
+
+        Kept as a separate method so the auto-run path calls exactly the code the
+        manual path calls. That is invariant AR-1 expressed structurally: there is
+        no second implementation that could drift.
+        """
 
         index = self._cursor
 
@@ -677,6 +937,10 @@ class Replay:
         self._last_signal = None
         self._exit_counts = {}
         self._status = STATE_IDLE
+
+        # A reset must never leave auto-run armed. Step 7 of the Phase 17C
+        # contract: resetting must not create a running ticker.
+        self._ticker.disarm()
 
     def _maybe_exit(
         self, index: int, signal: Signal, execution_bar: Candle
@@ -805,6 +1069,11 @@ class Replay:
             self._entry_index = None
 
         self._status = STATE_FINISHED
+
+        # Nothing more will be stepped, so nothing more may be ticked. Disarming
+        # here is what makes the terminal transition happen exactly once: further
+        # ticks find no due tick and return None.
+        self._ticker.disarm()
 
         self._assert_identities_unchanged()
 
