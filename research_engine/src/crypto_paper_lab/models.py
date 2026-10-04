@@ -25,6 +25,42 @@ class Signal:
     breakout: bool = False
     retest: bool = False
 
+    # --- Phase 14B signal-time instrumentation -------------------------
+    # Every field below is derived exclusively from the candles passed to
+    # ``analyze()``. When the caller supplies ``candles[:index]`` these are
+    # knowable strictly before the fill at ``candles[index].open``. None of
+    # them participates in the signal decision; the gates in ``analyze`` are
+    # unchanged. ``None`` means "not applicable for this signal", never a
+    # substituted zero.
+
+    #: Close of the signal candle, i.e. ``candles[-1]`` inside ``analyze``.
+    #: Recorded separately because ``run_backtest`` overwrites ``price``
+    #: with the next candle's open, which is a different value.
+    signal_close: float | None = None
+
+    #: Categorical trend already computed by ``indicators.trend``. Copied
+    #: verbatim; the trend calculation itself is untouched.
+    trend_state: Literal["up", "down", "sideways"] | None = None
+
+    #: Signed distance by which the trigger candle closed beyond the broken
+    #: level, as a fraction of that level. Positive means the level was
+    #: exceeded upward for a long, downward for a short. For a retest entry
+    #: this is measured on the candle that broke out; for a breakout entry,
+    #: on the signal candle itself.
+    breakout_distance: float | None = None
+
+    #: Distance of the signal candle's wick from the retested level, as a
+    #: fraction of that level. Recorded only for retest entries.
+    retest_distance: float | None = None
+
+    #: Trailing sample stdev of simple returns over ``StrategyConfig.lookback``
+    #: periods, computed from the pre-signal candles. Not annualised.
+    realised_volatility: float | None = None
+
+    #: Mean high-low range over ``StrategyConfig.lookback`` trailing candles.
+    #: A range proxy, not an ATR.
+    mean_range: float | None = None
+
 
 @dataclass
 class PaperTrade:
@@ -52,6 +88,23 @@ class PaperTrade:
     fee_total: float = 0.0
     slippage_total: float = 0.0
     spread_total: float = 0.0
+
+    # --- Phase 14B entry-time instrumentation --------------------------
+    # Copied from the triggering ``Signal`` at entry. All are ENTRY_TIME
+    # features: derived only from candles available before the fill, never
+    # from the exit, the trade outcome, MAE/MFE or any post-entry price.
+    # ``None`` means the feature does not apply to this trade. These fields
+    # are observational and are not read by any signal, sizing, exit or cost
+    # calculation.
+
+    signal_close: float | None = None
+    trend_state: Literal["up", "down", "sideways"] | None = None
+    breakout_distance: float | None = None
+    retest_distance: float | None = None
+    realised_volatility: float | None = None
+    mean_range: float | None = None
+    support_at_entry: float | None = None
+    resistance_at_entry: float | None = None
 
     @property
     def pnl(self) -> float | None:

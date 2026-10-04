@@ -1,0 +1,460 @@
+{
+  "phase": "15",
+  "title": "Research Checkpoint / Project State Audit",
+  "purpose": "Documentation and audit only. No strategy, parameter, dataset or prior artifact was modified.",
+  "generated_at": {
+    "git_head": "25bd7d0ab651e356240d8148525fb664938562b0",
+    "git_branch": "main",
+    "git_origin_main": "f5293c91da33e929a230ff385ab4458cfa232fee",
+    "git_clean": false,
+    "committed_by_phase15": false,
+    "pushed_by_phase15": false
+  },
+  "standing_conclusion": {
+    "statement": "No reliable profitability has been established for this strategy. Across 23,376 hourly candles, 12+ configurations and two full evaluation periods, the project has no evidence of a profitable trading rule.",
+    "source": "experiments/phase10/SUMMARY.md, phase11/SUMMARY.md, phase13/PLAN.md, phase14C/SUMMARY.md",
+    "unchanged_since": "Phase 10",
+    "revised_by_phase15": false
+  },
+  "strategy_state": {
+    "type": "single-asset, single-timeframe, long/short breakout-and-retest rule with opposite-signal exit",
+    "config_class": "crypto_paper_lab.strategy.StrategyConfig",
+    "frozen": true,
+    "defaults": {
+      "asset": "BTC/USDT",
+      "timeframe": "1h",
+      "lookback": 20,
+      "fast_period": 5,
+      "slow_period": 12,
+      "breakout_buffer": 0.001,
+      "retest_tolerance": 0.002,
+      "min_breakout_distance": 0.0,
+      "trend_strength_min": 0.001,
+      "retest_use_close": false,
+      "breakout_confirm_bars": 1,
+      "max_holding_bars": null,
+      "stop_loss_pct": null,
+      "take_profit_pct": null,
+      "allowed_sides": null
+    },
+    "entry_logic": "Signal computed from candles strictly before the fill bar; the fill occurs at the next candle's open. Entry fires on a bullish retest, bearish retest, uptrend breakout or downtrend breakdown; otherwise flat.",
+    "trend_logic": "Categorical up/down/sideways from a fast/slow simple-moving-average pair (5 and 12) with a minimum normalised separation of 0.001.",
+    "level_logic": "support = min(low), resistance = max(high) over a trailing 20-candle window excluding the previous and current signal candles.",
+    "exit_logic": "Opposite-signal exit only by default. stop_loss_pct, take_profit_pct and max_holding_bars are implemented but all default to None, which disables them.",
+    "execution_model": {
+      "default": "cost_deduction",
+      "alternative_available": "fill_price",
+      "alternative_is_opt_in": true,
+      "note": "fill_price was added in Phase 12 and is not used by any frozen research result."
+    },
+    "cost_assumptions": {
+      "fee_rate": 0.001,
+      "slippage_rate": 0.0005,
+      "spread_rate": 0.0
+    },
+    "position_model": {
+      "quantity_rule": "cash * risk_fraction / entry_reference_price",
+      "risk_fraction": 0.01,
+      "starting_balance": 10000.0,
+      "max_concurrent_positions": 1,
+      "pyramiding": false,
+      "partial_exit": false
+    },
+    "capability_ledger": {
+      "exists": [
+        "long and short entries",
+        "opposite-signal exit",
+        "optional stop-loss rule (implemented, disabled by default)",
+        "optional take-profit rule (implemented, disabled by default)",
+        "optional max-holding-bars rule (implemented, disabled by default)",
+        "optional directional gate allowed_sides (implemented, disabled by default)",
+        "cost_deduction and fill_price execution models",
+        "walk-forward harness with 11 leakage controls",
+        "causal entry-time feature instrumentation (Phase 14B)"
+      ],
+      "absent": [
+        "leverage",
+        "margin",
+        "pyramiding or scale-in",
+        "partial take-profit",
+        "trailing stop",
+        "profit callback or partial-profit lock",
+        "break-even move",
+        "funding cost",
+        "borrow cost on shorts",
+        "order-book depth or market impact",
+        "partial fills",
+        "multi-asset or multi-timeframe support",
+        "live or paper broker connectivity"
+      ]
+    }
+  },
+  "data_inventory": [
+    {
+      "role": "research",
+      "path": "research_engine/data/BTCUSDT_1h_Cleaned (1).csv",
+      "sha256": "201A3B15D50A791CB5BE2B755107C8303906C8FC3CA6B64E8377C9FC73BA016B",
+      "first_candle": "2024-01-01T00:00:00",
+      "last_candle": "2025-12-31T23:00:00",
+      "candles": 17544,
+      "timeframe": "1h",
+      "provenance": "undocumented; carried forward unchanged from before Phase 9",
+      "used_for": [
+        "Phase 5 research gates and entry filters",
+        "Phase 6 exit-rule experiments",
+        "Phase 7 entry-signal experiments and the A2 selection",
+        "Phase 8 reproduction and unseen-data search",
+        "Phase 13 walk-forward warm-up, training and evaluation windows",
+        "Phase 14C descriptive entry-context analysis"
+      ],
+      "used_as_out_of_sample": false,
+      "out_of_sample_note": "Explicitly labelled in-sample and exploratory from Phase 7 onward."
+    },
+    {
+      "role": "out_of_sample",
+      "path": "research_engine/data/oos/binance_spot_BTCUSDT_1h_202601-202608.csv",
+      "sha256": "918153FDE98E39C03EEF8A7B82A2861ADFDC98A080C8810E371869EB3EA22437",
+      "first_candle": "2026-01-01T00:00:00",
+      "last_candle": "2026-08-31T23:00:00",
+      "candles": 5832,
+      "timeframe": "1h",
+      "provenance": "Binance Vision monthly archives, 8 of 8 SHA-256 checksums verified before parsing",
+      "used_for": [
+        "Phase 10 out-of-sample validation",
+        "Phase 11 robustness, bootstrap and dependence analysis"
+      ],
+      "used_as_out_of_sample": true,
+      "consumed": true,
+      "out_of_sample_note": "Genuinely unseen when acquired in Phase 10. No longer unseen: it is now documented project history and is excluded from Phase 13 and Phase 14 primary analysis."
+    }
+  ],
+  "data_accounting": {
+    "total_candles_across_both_datasets": 23376,
+    "total_candles_claimed_by_phase10_and_phase11": 23376,
+    "accounting_consistent": true,
+    "unused_validation_data_exists": false,
+    "unused_validation_data_reason": "2026-01-01 to 2026-08-31 was consumed by Phase 10 and 11. 2026-09 to 2026-12 returned HTTP 404 at acquisition time and was never obtained. The 2024-2025 dataset has been used for research in every phase from 5 onward.",
+    "unavailable_periods_recorded": [
+      "2026-09",
+      "2026-10",
+      "2026-11",
+      "2026-12"
+    ]
+  },
+  "evidence_table": [
+    {
+      "phase": "5",
+      "question_tested": "Does the unmodified default configuration behave as recorded, and do optional research gates change it?",
+      "data_used": "2024-2025 research dataset, in-sample",
+      "experiment_performed": "Baseline reproduction plus Phase 5 research gates and entry filters",
+      "major_observed_result": "Baseline reproduced exactly: 344 trades, net -157.14, win rate 31.686%, profit factor 0.6920, max drawdown 1.74%, ending balance 9842.86.",
+      "limitation": "In-sample. Every gate explored here was selected on this same data.",
+      "kind": "negative_conclusion"
+    },
+    {
+      "phase": "6",
+      "question_tested": "Do stop-loss, take-profit or max-holding exit rules improve on opposite-signal exit?",
+      "data_used": "2024-2025 research dataset, in-sample",
+      "experiment_performed": "Exit-rule grid including max_holding 12 and 24 bars",
+      "major_observed_result": "No exit variant improved on the baseline; for example maxhold=12 produced 662 trades and net -235.65 against the baseline's 344 trades and -157.14.",
+      "limitation": "In-sample grid search. Negative results on a grid selected in-sample are weak evidence of general absence.",
+      "kind": "diagnostic_only"
+    },
+    {
+      "phase": "7",
+      "question_tested": "Which entry-signal variant behaves least badly across the full research period?",
+      "data_used": "2024-2025 research dataset, in-sample",
+      "experiment_performed": "Twelve-configuration entry-signal grid across min_breakout_distance, breakout_confirm_bars and allowed_sides",
+      "major_observed_result": "A2 (min_breakout_distance=0.002) gave 284 trades, net -87.16, profit factor 0.7957. A1 was identical to baseline. C1 (long only) gave net -34.19 on 172 trades. No configuration was profitable.",
+      "limitation": "A2 was selected on this data and is therefore contaminated for every later window that overlaps 2024-2025.",
+      "kind": "negative_conclusion"
+    },
+    {
+      "phase": "8",
+      "question_tested": "Can a valid out-of-sample test be performed with data available at that time?",
+      "data_used": "2024-2025 research dataset only",
+      "experiment_performed": "Exhaustive unseen-data search plus validation-harness construction",
+      "major_observed_result": "No genuinely unseen data existed. The harness was built and deliberately not run against in-sample data, because calling such a result out-of-sample would be false.",
+      "limitation": "A negative availability finding, not a performance measurement.",
+      "kind": "diagnostic_only"
+    },
+    {
+      "phase": "9",
+      "question_tested": "Which data source could supply genuine out-of-sample history?",
+      "data_used": "none; documentation review only",
+      "experiment_performed": "Source review of Binance Vision, Coinbase Exchange and Kraken",
+      "major_observed_result": "Binance Vision recommended for bulk monthly archives with published SHA-256 checksums and non-commercial research permission. Nothing was downloaded.",
+      "limitation": "Vendor claims were read from documentation, not verified by download, until Phase 10.",
+      "kind": "diagnostic_only"
+    },
+    {
+      "phase": "10",
+      "question_tested": "How does the frozen baseline and A2 behave on genuinely unseen 2026 data?",
+      "data_used": "2026-01-01 to 2026-08-31 OOS dataset, 5,832 candles, validation window 5,784 bars",
+      "experiment_performed": "Checksum-verified acquisition, four-stage validation, then out-of-sample run of both frozen configurations on the unmodified Phase 8 harness",
+      "major_observed_result": "Baseline 105 trades, net +5.05, profit factor 1.0424. A2 90 trades, net +14.07, profit factor 1.1330. Both marginally positive; every 95% interval spans zero (baseline mean/SE 0.13, A2 0.37). Costs consumed 86.2% and 65.8% of gross respectively. Months split four positive, four negative.",
+      "limitation": "Roughly 90 to 105 trades cannot resolve an effect of this size. Single window, single asset, four months missing. The sign reversed relative to 2024-2025 with no strategy change.",
+      "kind": "negative_conclusion"
+    },
+    {
+      "phase": "11",
+      "question_tested": "How much of the Phase 10 result can be trusted?",
+      "data_used": "2026-01-01 to 2026-08-31 OOS dataset",
+      "experiment_performed": "Mark-to-market drawdown, block bootstrap at five block lengths, two resampling methods, 10,000 resamples, seed 20260101, concentration and monthly analysis",
+      "major_observed_result": "Every confidence interval contains zero at every block length and under both methods. Baseline's largest single win equals 378.8% of its entire net P&L and the top three equal 972.2%; removing the largest losing trade turns net to -1.14. Median trade is -0.89 (baseline) and -0.96 (A2). Mark-to-market drawdown is 1.12 to 1.16 times the closed-trade measure. Serial dependence measured negligible.",
+      "limitation": "Intervals describe the historical sample only. The block bootstrap assumes exchangeable blocks, which is an approximation for time-adjacent trades.",
+      "kind": "negative_conclusion"
+    },
+    {
+      "phase": "12",
+      "question_tested": "Is the execution model realistic enough for the recorded results to mean anything?",
+      "data_used": "none; code audit plus formula derivation",
+      "experiment_performed": "Execution-realism audit of prices, sizing, fees, slippage and spread; added the opt-in fill_price model and a Phase 12.1 remediation",
+      "major_observed_result": "Five confirmed problems: recorded prices were not fills, stop and target levels were anchored to an unachievable price, position size ignored the fill, fees were charged on raw notional, and spread was not representable. fill_price corrects all five while remaining deterministic and opt-in, so every prior result still reproduces.",
+      "limitation": "Spread and slippage remain proportional constants. No partial fills, market impact, order-book depth, funding or borrow cost. Improved realism does not make the strategy suitable for trading.",
+      "kind": "diagnostic_only"
+    },
+    {
+      "phase": "13",
+      "question_tested": "How does the strategy behave across successive fixed historical sub-periods?",
+      "data_used": "2024-2025 research dataset; six evaluation windows covering 2024-07-01 to 2025-12-31, 13,176 evaluation candles",
+      "experiment_performed": "Pre-registered rolling walk-forward with 11 mandatory leakage controls, two passes reported separately",
+      "major_observed_result": "Baseline: 267 trades, all six windows net negative, window net range -49.73 to -4.67, longest same-sign run 6, profit factor below 1.0 in every window. A2: 217 trades, two windows positive and four negative. Total net -133.86 (baseline) and -72.68 (A2).",
+      "limitation": "A historical diagnostic, not fresh validation. Six sequential windows support no window-level inference. A2 windows 2 to 6 lie inside its Phase 7 selection period. One retained end_of_data force-close per window.",
+      "kind": "negative_conclusion"
+    },
+    {
+      "phase": "14A",
+      "question_tested": "What entry-time features are computable without look-ahead, and what sample is available to analyse them?",
+      "data_used": "Phase 13 frozen artifacts and the Phase 14B source tree",
+      "experiment_performed": "Read-only design audit; five candidate designs D1 to D5",
+      "major_observed_result": "The binding constraint is sample size, not data availability. Trend, volatility, breakout distance and retest quality were computable from existing candles with no hindsight but were not recorded. MAE/MFE are hindsight. Phase 14C cannot be validated on unused data because 2026 was already consumed.",
+      "limitation": "Read-only audit; no experiment was run and no outcome was inspected.",
+      "kind": "diagnostic_only"
+    },
+    {
+      "phase": "14B",
+      "question_tested": "Can the missing entry-time features be recorded without changing any decision?",
+      "data_used": "2024-2025 research dataset",
+      "experiment_performed": "Instrumentation of six Signal fields and eight PaperTrade fields, two new causal indicators, and a discriminating test suite",
+      "major_observed_result": "All six frozen Phase 13 baseline windows reproduce the committed trade counts and ending balances to within 1e-9, so behaviour is unchanged. 31 of 31 injected defects were caught, including lookahead, propagation, missing-value and gate mutations.",
+      "limitation": "Instrumentation only. No outcome was examined, so no association was tested.",
+      "kind": "diagnostic_only"
+    },
+    {
+      "phase": "14C",
+      "question_tested": "Do recorded entry-time conditions differ descriptively across trade outcomes?",
+      "data_used": "2024-2025 research dataset, same six Phase 13 windows",
+      "experiment_performed": "D1 feature distributions, D2 conditional outcome summaries over seven pre-declared dimensions, D3 robustness accounting; 30 of 30 injected defects caught",
+      "major_observed_result": "Baseline lost money in total (-133.86 across 267 trades) and in all six windows. Every Spearman rho between a continuous entry feature and net P&L is weak, with absolute values at or below 0.21. Only 4 of 24 cells per pass met even the weak bar for naming as a hypothesis candidate.",
+      "limitation": "Whole-sample quartile edges mean a window 1 trade was binned partly using window 6 information. 48 cells were examined across both passes. Trade dependence is mechanical because only one position is held at a time.",
+      "kind": "diagnostic_only"
+    }
+  ],
+  "observed": [
+    "Baseline on 2024-2025 in-sample: 344 trades, net -157.14, profit factor 0.6920.",
+    "Baseline on 2026 OOS: 105 trades, net +5.05, profit factor 1.0424, 95% interval [-0.6688, +0.7649] per trade.",
+    "A2 on 2026 OOS: 90 trades, net +14.07, profit factor 1.1330, 95% interval [-0.6632, +0.9758] per trade.",
+    "Costs consumed 86.2% of baseline gross and 65.8% of A2 gross on the 2026 OOS data.",
+    "The median trade was negative for both configurations on 2026 (-0.89 baseline, -0.96 A2).",
+    "Every confidence interval computed in Phase 11 contains zero.",
+    "Phase 13 baseline was net negative in all six evaluation windows; A2 was negative in four of six.",
+    "The 2024-2025 to 2026 sign reversal occurred with no change to the strategy.",
+    "Phase 14C found no strong rank association between any causal entry-time feature and net P&L."
+  ],
+  "not_established": [
+    "That any configuration is profitable.",
+    "That baseline is better or worse than A2; the two were never ranked and are not ranked here.",
+    "That any entry-time feature is predictive of future outcomes.",
+    "That any Phase 14C conditional difference is anything other than sampling variation.",
+    "Whether the 2026 positive result and the 2024-2025 negative result share a cause.",
+    "Whether the strategy would behave differently on another asset or timeframe; neither was tested.",
+    "How the strategy behaves after 2026-08; no data exists.",
+    "Whether the 2024-2025 dataset's construction is continuous with the 2026 dataset; only timestamp continuity is documented."
+  ],
+  "constraints": [
+    "No unused validation data remains; every acquired candle has been examined.",
+    "The primary sample is 267 baseline and 217 A2 trades across six sequential windows.",
+    "Trades are mechanically clustered: one position at a time with a mean holding period of 49 to 60 bars, so the trade count is not an independent sample size.",
+    "A2 was selected on 2024-2025 in Phase 7, so its Phase 13 windows 2 to 6 are not independent of that selection.",
+    "Phases 5 to 7 were in-sample searches over 12 or more configurations on the same data.",
+    "Phase 14C examined 48 conditional cells on the same 2024-2025 data, with whole-sample quartile edges.",
+    "No window-level confidence interval is supportable at six windows.",
+    "Execution realism remains approximate: proportional constant spread and slippage, no market impact, no borrow or funding cost.",
+    "The Phase 13 per-window records omit dataset_sha256; this shortfall was deliberately left uncorrected to avoid post-hoc regeneration."
+  ],
+  "degrees_of_freedom": [
+    {
+      "source": "parameter selection",
+      "detail": "Phases 5 to 7 searched 12 or more entry and exit variants on 2024-2025 and selected A2 from that search.",
+      "kind": "methodological_constraint"
+    },
+    {
+      "source": "repeated inspection",
+      "detail": "2024-2025 was examined in Phases 2 through 9, again in Phase 13 and again in Phase 14C. Repeated inspection of the same period can converge on a pattern by search alone.",
+      "kind": "methodological_constraint"
+    },
+    {
+      "source": "A2 contamination",
+      "detail": "A2's min_breakout_distance=0.002 was chosen in Phase 7 on 2024-2025, which contains five of the six Phase 13 evaluation windows.",
+      "kind": "methodological_constraint"
+    },
+    {
+      "source": "conditional subgroup analysis",
+      "detail": "Phase 14C examined 48 cells over seven pre-declared dimensions. Only four met the weak naming bar and all are hypothesis candidates.",
+      "kind": "methodological_constraint"
+    },
+    {
+      "source": "whole-sample descriptive quartiles",
+      "detail": "Phase 14C bin edges were computed over the whole sample, so a window 1 trade was binned partly using window 6 information. This is a descriptive grouping, not a live-applicable rule.",
+      "kind": "methodological_constraint"
+    },
+    {
+      "source": "sample-size limitation",
+      "detail": "267 and 217 trades; per-trade standard deviation near 3.75 to 3.97 against means of 0.05 to 0.16 on OOS data. An effect of the observed size cannot be resolved at this sample.",
+      "kind": "methodological_constraint"
+    },
+    {
+      "source": "multiple-comparison risk",
+      "detail": "Phase 14A recorded that a scan of even a dozen features on this sample will surface at least one apparently interesting pattern by chance. All cells were reported including null ones so the count stays visible.",
+      "kind": "methodological_constraint"
+    },
+    {
+      "source": "sequential dependence",
+      "detail": "Windows are consecutive periods of one continuous series, not independent samples. Only one position is open at a time, so consecutive trades are separated by a full holding period.",
+      "kind": "methodological_constraint"
+    },
+    {
+      "source": "absence of unused validation data",
+      "detail": "2026 was consumed by Phases 10 and 11; 2026-09 to 2026-12 were unavailable at HTTP 404. No holdout remains.",
+      "kind": "methodological_constraint"
+    }
+  ],
+  "available_research_paths": [
+    {
+      "category": "acquisition of genuinely fresh holdout data",
+      "question": "Does anything established here hold on data never before examined?",
+      "data_required": "2026-09 onward Binance Vision archives once published, or another never-acquired period",
+      "current_data_sufficient": false,
+      "requires_new_holdout": true,
+      "contamination_risk": "None for genuinely new data. The pipeline that proved acquisition reliable in Phase 10 already exists and is checksum-verified.",
+      "note": "This is the only path that can convert an association into a validated claim. It is a data task, not a strategy task."
+    },
+    {
+      "category": "execution-model extension",
+      "question": "How much of the observed gross edge does realistic execution consume?",
+      "data_required": "Existing candles plus venue knowledge for spread; order-book data for size or volatility dependence",
+      "current_data_sufficient": false,
+      "requires_new_holdout": false,
+      "contamination_risk": "Low. This is a measurement improvement on already-consumed data and cannot itself produce a profitability claim. Hourly OHLC cannot support a size-dependent spread.",
+      "note": "Phase 12 already supplies the fill_price model; it is opt-in and unused by any frozen result."
+    },
+    {
+      "category": "alternative assets or timeframes",
+      "question": "Is the observed behaviour specific to BTC/USDT 1h?",
+      "data_required": "Never-acquired assets or timeframes",
+      "current_data_sufficient": false,
+      "requires_new_holdout": true,
+      "contamination_risk": "None for new assets. This tests generalisation, not optimisation, provided no variant is tuned on the new data before evaluation."
+    },
+    {
+      "category": "independently specified strategy hypothesis",
+      "question": "Does a separately pre-registered rule behave differently from this one?",
+      "data_required": "A holdout not used to derive the hypothesis",
+      "current_data_sufficient": false,
+      "requires_new_holdout": true,
+      "contamination_risk": "High if specified after inspecting existing results. Must be pre-registered before any evaluation, and must not be compared head-to-head with baseline on consumed data and called a winner."
+    },
+    {
+      "category": "independent strategy redesign",
+      "question": "Does a structurally different design behave better?",
+      "data_required": "A holdout not used during development",
+      "current_data_sufficient": false,
+      "requires_new_holdout": true,
+      "contamination_risk": "High. Redesign informed by Phase 14C observations would import that inspection into the design."
+    },
+    {
+      "category": "additional statistical methodology",
+      "question": "How sensitive are the recorded conclusions to the dependence and resampling assumptions?",
+      "data_required": "None beyond what is already recorded",
+      "current_data_sufficient": true,
+      "requires_new_holdout": false,
+      "contamination_risk": "Low, provided the method is chosen and reported before the result is seen. Phase 11 already reports block-length sensitivity; Phase 14C deliberately reports no p-value because the independence assumption is unsupported."
+    },
+    {
+      "category": "data provenance resolution",
+      "question": "How was the 2024-2025 dataset constructed, and is it continuous with 2026?",
+      "data_required": "Vendor documentation or re-acquisition",
+      "current_data_sufficient": false,
+      "requires_new_holdout": false,
+      "contamination_risk": "None. This is a records question carried as an open gap since Phase 9.",
+      "note": "Timestamp continuity across the boundary is established; construction continuity is not."
+    }
+  ],
+  "paths_that_should_not_be_treated_as_validation": [
+    "Selecting a Phase 14C condition as an entry filter and reporting the result on 2024-2025. Both the search and the evaluation would use consumed data.",
+    "Re-running the Phase 13 walk-forward after adding any filter derived from Phase 14C observations.",
+    "Comparing baseline and A2 on 2026 again and calling the larger figure a winner. A2 was selected on 2024-2025 and the 2026 result is one window.",
+    "Any further parameter sweep on 2024-2025 or 2026. Both are fully consumed.",
+    "Re-deriving bin edges or thresholds from outcomes and reporting the improved fit.",
+    "Pooling 2024-2025 with 2026 to enlarge the sample. Phase 14A classified this as manufactured validation.",
+    "Treating 2026 as still unseen.",
+    "Reporting a p-value on Phase 14C trades, which assumes an independence the one-position-at-a-time design does not provide."
+  ],
+  "frozen_artifact_hashes": {
+    "phase10": {
+      "SUMMARY.md": "4972C7857B61A67AFC8C43FA4E806318924A769E7AA80C6E1325C04EE85EE762",
+      "OOS_RESULTS.md": "D5598C7CAB629FF0732FD0CC778CF443BED48B5DF14EAF0D3BC1A56676708AEC",
+      "DOWNLOAD_REPORT.md": "740E3501956A499E65021250A4557E6BCC961A4793444CD8CFE85E938BBEABC1",
+      "CHECKSUM_REPORT.md": "890757AC1B9D6170D4707432C8C7978759FA91B3BD4C4B1BE37A4F6D008ADAB6",
+      "DATA_QUALITY_REPORT.md": "E041379D1FC4A21DBED85F34CD8AEAD03B20312BEFBB90BDD91F834A220C70BC",
+      "PROVENANCE.md": "683060D2980E75F19BA63345231C5D3214B2CDDC5D89BC1CF34111142D004BE1",
+      "RESULTS_oos_harness.txt": "2FF0670EC958342D536903470A6DB3F2B3EC52CB3DE69C7D2EDCECC808340DAA",
+      "RESULTS_interpretation.txt": "C76AFDD9765CC665AC8CAA490D4DABE4D84AB2ACE4037D32D3BA7BE7DA13A891"
+    },
+    "phase11": {
+      "SUMMARY.md": "4BD7D318D88F35CC8F749FD408DF4871E545374A1BAD8ED0675DA2A75D2F0F38",
+      "RESULTS_robustness.txt": "177B90A9BD79F9020CD9D2C261780362DD6EBF3F1EEEBA368E8367BD1A14CAA5",
+      "RESULTS_dependence.txt": "B53D00DD42458922302A0449ED3D7A6B0BAF436F5314189691C713D2001EEA03"
+    },
+    "phase12": {
+      "PHASE12_REPORT.md": "FD66A6107FA733BB34619F2BF78AFD395617B38438C0CCD977C07311E06D3072"
+    },
+    "phase13": {
+      "PLAN.md": "8D9F9021AE22AE36344FD14464796486A7EA415B261C7AA189E4A180DB7D7800",
+      "EXPERIMENT_LOG.md": "2E59ABDB7E211C6012F40BC55A8F56634763C0C5CCBE0804A7700199B445F435",
+      "SUMMARY.md": "188D3A1B8297E6D4B10CA6C30AB198358D69877124A782E6D3EBBE618F04138D",
+      "RESULTS_windows.csv": "1A2D37A4FF744F59BEE6A85E8A8E61538AFCC43C7B0FC17A352DCC1559953E7D",
+      "RESULTS_windows.json": "67092DEC496A675B201664C66F6CC485C37EF242648BE832FCC44E68FEC94224"
+    },
+    "phase14": {
+      "DESIGN_AUDIT.md": "A8643384D70370C15F3AD313E5E30D8ED6FA7B43820D7C541101FFE07ABDA5C6",
+      "INSTRUMENTATION.md": "1F858ECB15E1227D67470EEC0FDC4BE004793742EC880A98C8BE01F9A1F3AB74",
+      "SUMMARY.md": "78CA2119D7BC201CEFBF2A873CC692E37DABCC5F118E319EF2823D7B6BD37461",
+      "RESULTS_feature_summary.csv": "C30092F29199D6EB74765680EEB9420C4D73D36E2CAFF78D36A21E09785E9096",
+      "RESULTS_condition_summary.csv": "9A7355FFC87017BD8B4C75C4AFE0E30C0BF526AD81F2F46AB46579EAB8B2E8C2",
+      "RESULTS_analysis.json": "18E21E2553AB99ED660AA52DEC595E2E951B72ACA958DCD16C4FCA0096169D27"
+    }
+  },
+  "hash_note": "All values recomputed from the repository at Phase 15. Phase 13 entries match the digests independently established during Phases 13 and 14. Phase 10, 11, 12 and 14 digests were not previously recorded in the repository; these are the authoritative current values and are re-verified by tests/test_phase15_checkpoint.py.",
+  "datasets_sha256": {
+    "research": "201A3B15D50A791CB5BE2B755107C8303906C8FC3CA6B64E8377C9FC73BA016B",
+    "out_of_sample": "918153FDE98E39C03EEF8A7B82A2861ADFDC98A080C8810E371869EB3EA22437"
+  },
+  "test_count_at_checkpoint": 497,
+  "test_count_note": "Recorded as the collected count before this phase's own tests were added. tests/test_phase15_checkpoint.py asserts the current suite collects at least this many, so accidental test deletion is detected.",
+  "known_record_gaps": [
+    "Phases 1 to 4 predate the experiment-record convention. No report artifact exists for them; what is established about them comes from the git log and from cross-references in the Phase 5 and Phase 9 summaries.",
+    "The Phase 13 per-window records omit dataset_sha256. Deliberately uncorrected; see EXPERIMENT_LOG.md entry 3.",
+    "The Phase 14C RESULTS_analysis.json trade_population entries carry no config_name key. Left uncorrected because the artifact is frozen."
+  ],
+  "phase15_actions": {
+    "strategy_modified": false,
+    "parameters_modified": false,
+    "datasets_modified": false,
+    "prior_artifacts_modified": false,
+    "experiments_run": false,
+    "new_research_findings": false,
+    "phase16_started": false
+  }
+}

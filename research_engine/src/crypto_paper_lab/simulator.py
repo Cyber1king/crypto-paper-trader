@@ -91,6 +91,11 @@ class PaperBroker:
 
         quantity = (self.cash * risk_fraction) / fill
 
+        # Phase 14B: copy the ENTRY_TIME signal features onto the trade so
+        # they survive independently of the Signal object. ``support`` and
+        # ``resistance`` are the levels the signal was judged against, taken
+        # from the pre-signal candles. None of these fields is read by any
+        # sizing, exit or cost calculation.
         self.open_trade = PaperTrade(
             side=signal.side,
             entry_time=signal.timestamp,
@@ -98,6 +103,14 @@ class PaperBroker:
             quantity=quantity,
             reason=signal.reason,
             raw_entry_price=reference,
+            signal_close=signal.signal_close,
+            trend_state=signal.trend_state,
+            breakout_distance=signal.breakout_distance,
+            retest_distance=signal.retest_distance,
+            realised_volatility=signal.realised_volatility,
+            mean_range=signal.mean_range,
+            support_at_entry=signal.support,
+            resistance_at_entry=signal.resistance,
         )
 
         return self.open_trade

@@ -2,7 +2,12 @@
 from dataclasses import dataclass
 from typing import Sequence
 
-from .indicators import support_resistance, trend
+from .indicators import (
+    mean_candle_range,
+    realised_volatility,
+    support_resistance,
+    trend,
+)
 from .models import Candle, Signal
 
 
@@ -71,17 +76,32 @@ def analyze(
         strength=config.trend_strength_min,
     )
 
+    def distance_above(close: float, level: float) -> float:
+        """Signed distance by which ``close`` exceeds ``level``, as a fraction.
+
+        Phase 14B: this expression already existed inside the gate below and
+        was discarded. It is now named so the numeric value can be recorded.
+        The arithmetic is unchanged, so the gate result is bit-identical.
+        """
+
+        return (close - level) / level
+
+    def distance_below(close: float, level: float) -> float:
+        """Signed distance by which ``close`` falls below ``level``."""
+
+        return (level - close) / level
+
     def broke_level_up(close: float, level: float) -> bool:
         return (
             close > level * (1 + config.breakout_buffer)
-            and (close - level) / level
+            and distance_above(close, level)
             >= config.min_breakout_distance
         )
 
     def broke_level_down(close: float, level: float) -> bool:
         return (
             close < level * (1 - config.breakout_buffer)
-            and (level - close) / level
+            and distance_below(close, level)
             >= config.min_breakout_distance
         )
 
@@ -134,14 +154,40 @@ def analyze(
         broke_level_down(close, support) for close in recent_closes
     )
 
+    # Phase 14B instrumentation. These assignments are observational only:
+    # the decision chain below is unchanged, and every value is derived from
+    # ``current`` or ``previous``, which are candles strictly before the fill.
+    #
+    # For a retest entry the breakout belongs to ``previous``, so that is
+    # where the breakout distance is measured. For a breakout entry the
+    # breakout is on the signal candle itself.
+    #
+    # ``None`` means "not applicable for this signal kind". It is never a
+    # substituted zero.
+    breakout_distance: float | None = None
+    retest_distance: float | None = None
+
+    if config.retest_use_close:
+        long_retest_distance = abs(current.close - resistance) / resistance
+        short_retest_distance = abs(current.close - support) / support
+    else:
+        long_retest_distance = abs(current.low - resistance) / resistance
+        short_retest_distance = abs(current.high - support) / support
+
     if market_trend == "up" and retest_up:
         side, reason = "long", "bullish retest"
+        breakout_distance = distance_above(previous.close, resistance)
+        retest_distance = long_retest_distance
     elif market_trend == "down" and retest_down:
         side, reason = "short", "bearish retest"
+        breakout_distance = distance_below(previous.close, support)
+        retest_distance = short_retest_distance
     elif market_trend == "up" and broke_up:
         side, reason = "long", "uptrend breakout"
+        breakout_distance = distance_above(current.close, resistance)
     elif market_trend == "down" and broke_down:
         side, reason = "short", "downtrend breakdown"
+        breakout_distance = distance_below(current.close, support)
     else:
         side, reason = "flat", "no confirmed breakout or retest"
 
@@ -155,4 +201,12 @@ def analyze(
         trend=market_trend,
         breakout=broke_up or broke_down,
         retest=retest_up or retest_down,
+        signal_close=current.close,
+        trend_state=market_trend,
+        breakout_distance=breakout_distance,
+        retest_distance=retest_distance,
+        realised_volatility=realised_volatility(
+            candles, config.lookback
+        ),
+        mean_range=mean_candle_range(candles, config.lookback),
     )

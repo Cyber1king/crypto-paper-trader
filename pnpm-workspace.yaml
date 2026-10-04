@@ -16,15 +16,11 @@
 # passed (e.g. an urgent security bugfix), you can add it to the
 # `minimumReleaseAgeExclude` allowlist below. Only consider doing this for
 # packages released by trusted organizations with an impeccable security
-# posture (e.g. Replit packsges, react from Meta, typescript from Microsoft). Even then,
-# remove the exclusion once the 1-day window has passed.
-#
-# Example:
-#   minimumReleaseAgeExclude:
-#     - react
-#     - typescript
+# posture (e.g. Replit packages, react from Meta, typescript from Microsoft).
+# Even then, remove the exclusion once the 1-day window has passed.
 #
 # ============================================================================
+
 minimumReleaseAge: 1440
 
 minimumReleaseAgeExclude:
@@ -44,6 +40,7 @@ catalog:
   '@replit/vite-plugin-cartographer': ^0.5.21
   '@replit/vite-plugin-dev-banner': ^0.1.1
   '@replit/vite-plugin-runtime-error-modal': ^0.0.6
+  '@tailwindcss/typography': ^0.5.15
   '@tailwindcss/vite': ^4.1.14
   '@tanstack/react-query': ^5.90.21
   '@types/node': ^25.3.3
@@ -75,7 +72,9 @@ onlyBuiltDependencies:
   - unrs-resolver
 
 overrides:
-  # replit uses linux-x64 only, we can exclude all other platforms
+  # Replit uses linux-x64 only, so exclude unused platforms.
+  # Windows x64 entries needed for local development are intentionally enabled.
+
   "esbuild>@esbuild/darwin-arm64": "-"
   "esbuild>@esbuild/darwin-x64": "-"
   "esbuild>@esbuild/freebsd-arm64": "-"
@@ -95,12 +94,14 @@ overrides:
   "esbuild>@esbuild/sunos-x64": "-"
   "esbuild>@esbuild/win32-arm64": "-"
   "esbuild>@esbuild/win32-ia32": "-"
-  "esbuild>@esbuild/win32-x64": "-"
-  "esbuild>@esbuild/aix-ppc64": '-'
-  "esbuild>@esbuild/android-arm": '-'
-  "esbuild>@esbuild/android-arm64": '-'
-  "esbuild>@esbuild/android-x64": '-'
-  "esbuild>@esbuild/openharmony-arm64": '-'
+  # IMPORTANT: keep win32-x64 enabled for Windows development.
+  # "esbuild>@esbuild/win32-x64": "-"
+  "esbuild>@esbuild/aix-ppc64": "-"
+  "esbuild>@esbuild/android-arm": "-"
+  "esbuild>@esbuild/android-arm64": "-"
+  "esbuild>@esbuild/android-x64": "-"
+  "esbuild>@esbuild/openharmony-arm64": "-"
+
   "lightningcss>lightningcss-android-arm64": "-"
   "lightningcss>lightningcss-darwin-arm64": "-"
   "lightningcss>lightningcss-darwin-x64": "-"
@@ -111,9 +112,9 @@ overrides:
   "lightningcss>lightningcss-linux-x64-musl": "-"
   "lightningcss>lightningcss-win32-arm64-msvc": "-"
   "lightningcss>lightningcss-win32-x64-msvc": "-"
+
   "@tailwindcss/oxide>@tailwindcss/oxide-android-arm64": "-"
   "@tailwindcss/oxide>@tailwindcss/oxide-darwin-arm64": "-"
-  "@tailwindcss/oxide>@tailwindcss/oxide-darwin-x64": "-"
   "@tailwindcss/oxide>@tailwindcss/oxide-freebsd-x64": "-"
   "@tailwindcss/oxide>@tailwindcss/oxide-linux-arm-gnueabihf": "-"
   "@tailwindcss/oxide>@tailwindcss/oxide-linux-arm64-gnu": "-"
@@ -121,6 +122,7 @@ overrides:
   "@tailwindcss/oxide>@tailwindcss/oxide-win32-arm64-msvc": "-"
   "@tailwindcss/oxide>@tailwindcss/oxide-win32-x64-msvc": "-"
   "@tailwindcss/oxide>@tailwindcss/oxide-linux-x64-musl": "-"
+
   "rollup>@rollup/rollup-android-arm-eabi": "-"
   "rollup>@rollup/rollup-android-arm64": "-"
   "rollup>@rollup/rollup-darwin-arm64": "-"
@@ -144,7 +146,10 @@ overrides:
   "rollup>@rollup/rollup-win32-arm64-msvc": "-"
   "rollup>@rollup/rollup-win32-ia32-msvc": "-"
   "rollup>@rollup/rollup-win32-x64-gnu": "-"
-  "rollup>@rollup/rollup-win32-x64-msvc": "-"
+
+  # IMPORTANT: keep Windows x64 MSVC Rollup enabled for local Windows development.
+  # "rollup>@rollup/rollup-win32-x64-msvc": "-"
+
   "@expo/ngrok-bin>@expo/ngrok-bin-darwin-arm64": "-"
   "@expo/ngrok-bin>@expo/ngrok-bin-darwin-x64": "-"
   "@expo/ngrok-bin>@expo/ngrok-bin-freebsd-ia32": "-"
@@ -155,8 +160,11 @@ overrides:
   "@expo/ngrok-bin>@expo/ngrok-bin-sunos-x64": "-"
   "@expo/ngrok-bin>@expo/ngrok-bin-win32-ia32": "-"
   "@expo/ngrok-bin>@expo/ngrok-bin-win32-x64": "-"
-  # drizzle-kit uses esbuild internally on an older version that's vulnerable, this overrides it
+
+  # drizzle-kit uses esbuild internally on an older version that's vulnerable,
+  # this overrides it.
   "@esbuild-kit/esm-loader": "npm:tsx@^4.21.0"
   esbuild: "0.28.2"
+
   # orval pins js-yaml to an exact version older than the CVE fix (>=4.3.2)
   js-yaml: '4.3.2'
