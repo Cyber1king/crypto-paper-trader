@@ -195,6 +195,23 @@ class PaperSession:
 
         return self._broker
 
+    def use_broker(self, broker: PaperBroker) -> None:
+        """Re-point this session at a different broker, keeping its identity.
+
+        Added in Phase 17D. ``crypto_paper_lab.replay.Replay.reset()`` constructs a
+        **new** ``PaperBroker`` rather than clearing the old one, so a session left
+        bound to the previous broker would go on reporting the balance and journal
+        it happened to hold at that moment. That is two sources of truth for the
+        same simulated money, which is precisely what the architecture forbids.
+
+        Rebinding in place keeps ``session_id`` stable, so ``/api/session`` stays
+        deterministic while ``/api/account``, ``/api/trades`` and
+        ``/api/statistics`` follow the replay's current broker.
+        """
+
+        self._broker = broker
+        self._costs = broker.costs
+
     @property
     def config(self) -> StrategyConfig:
         return self._config

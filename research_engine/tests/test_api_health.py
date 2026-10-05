@@ -172,9 +172,9 @@ def test_only_the_permitted_routes_exist(client: TestClient) -> None:
 
     Phase 16A allowed only ``/healthz``; 16B added ``/api/session``; 16C added
     ``/api/market``; 16D added ``/api/signal``; 16E added ``/api/account``,
-    ``/api/position`` and ``/api/trades``; 16F added ``/api/statistics``. Any
-    further route must be a conscious decision with its own tests, not a
-    by-product.
+    ``/api/position`` and ``/api/trades``; 16F added ``/api/statistics``.
+    Phase 17D added the five ``/api/replay`` control routes. Any further route
+    must be a conscious decision with its own tests, not a by-product.
     """
 
     paths = {
@@ -192,15 +192,17 @@ def test_only_the_permitted_routes_exist(client: TestClient) -> None:
         "/api/position",
         "/api/trades",
         "/api/statistics",
+        "/api/replay",
+        "/api/replay/start",
+        "/api/replay/pause",
+        "/api/replay/step",
+        "/api/replay/reset",
     }
 
 
 @pytest.mark.parametrize(
     "path",
     [
-        "/api/replay/start",
-        "/api/replay/step",
-        "/api/replay/reset",
         "/orders",
         "/api/order",
         "/api/execute",
@@ -209,16 +211,24 @@ def test_only_the_permitted_routes_exist(client: TestClient) -> None:
         "/api/manual",
         "/api/high-risk",
         "/api/equity",
+        "/api/position/close",
+        "/api/replay/seek",
     ],
 )
 def test_deferred_routes_do_not_exist(client: TestClient, path: str) -> None:
     """Deferred routes stay absent.
 
     ``/api/statistics``, ``/api/session``, ``/api/market``, ``/api/signal``,
-    ``/api/account``, ``/api/position`` and ``/api/trades`` are deliberately
-    excluded: each was added in its own phase with its own tests. ``/api/equity``
-    is listed because the equity curve is *not* a statistics endpoint - it
-    needs a live mark price the engine cannot produce.
+    ``/api/account``, ``/api/position``, ``/api/trades`` and the five
+    ``/api/replay`` control routes are deliberately excluded: each was added in its
+    own phase with its own tests.
+
+    ``/api/equity`` is listed because the equity curve is *not* a replay or
+    statistics endpoint - it needs a live mark price the engine cannot produce.
+    ``/api/position/close`` stays absent because Phase 17A decision Q1 declined
+    manual close. ``/api/replay/seek`` stays absent because rewinding is
+    ``reset`` plus ``step(count)``, and adding a seek would be a second way to do
+    one thing.
     """
 
     assert client.get(path).status_code == 404
@@ -285,6 +295,8 @@ ALLOWED_ENGINE_IMPORTS = {
     "models",        # Signal and PaperTrade types
     "stats",         # performance and cost_breakdown - the ONLY statistics
                      # source; Phase 16F recomputes none of it
+    "replay",       # Replay - the ONLY replay engine; Phase 17D adds no
+                     # lifecycle, step or accounting logic of its own
 }
 
 

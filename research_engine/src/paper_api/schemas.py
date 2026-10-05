@@ -501,3 +501,222 @@ class StatisticsResponse(_Strict):
     costs: CostTotalsModel
     strategy: StrategyIdentityModel
     execution: ExecutionIdentityModel
+
+
+# ---------------------------------------------------------------------------
+# replay (Phase 17D)
+# ---------------------------------------------------------------------------
+
+
+class ReplayDatasetModel(_Strict):
+    """Which historical dataset a replay is walking.
+
+    Mirrors ``crypto_paper_lab.replay.DatasetIdentity``. A hash and declared
+    bounds, never a filesystem path - the same rule ``/api/market`` follows.
+    """
+
+    asset: str
+    timeframe: str
+    sha256: str
+    first_timestamp: datetime
+    last_timestamp: datetime
+    candle_count: int
+    interval_seconds: int
+
+
+class ReplaySignalModel(_Strict):
+    """The engine ``Signal`` behind ``ReplayState.last_signal``, field for field.
+
+    Distinct from Phase 16's ``SignalResponse`` on purpose. That model carries
+    ``service``, ``asset``, ``timeframe``, ``strategy`` and ``source``, which
+    describe the *request* that produced it. A replay's signal is not the product
+    of a request, so including them here would mean synthesising identity the
+    signal does not have.
+
+    ``price`` is the **signal candle's close**, not the next bar's open. ``Replay``
+    keeps the signal ``analyze`` returned and never rewrites it, so ``price`` and
+    ``signal_close`` are equal. A consumer must not read this field as a fill.
+    """
+
+    timestamp: datetime
+    side: Literal["long", "short", "flat"]
+    reason: str
+    price: float
+    support: float
+    resistance: float
+    trend: Literal["up", "down", "sideways"]
+    breakout: bool
+    retest: bool
+    signal_close: float | None
+    trend_state: Literal["up", "down", "sideways"] | None
+    breakout_distance: float | None
+    retest_distance: float | None
+    realised_volatility: float | None
+    mean_range: float | None
+
+
+class ReplayStateResponse(_Strict):
+    """A faithful transport projection of ``crypto_paper_lab.replay.ReplayState``.
+
+    Every field maps one-to-one onto the engine dataclass. Nothing is added,
+    renamed, rounded or derived - if a number is not in ``ReplayState`` it is not
+    here, and if it is in ``ReplayState`` it is here.
+
+    Absent, because the engine cannot authoritatively produce them and inventing
+    a transport field would create a second financial model: ``equity``,
+    ``mark_price``, ``unrealized_pnl``, ``available_balance``,
+    ``reserved_capital``, ``margin``, ``buying_power``, ``notional``,
+    ``leverage`` and ``confidence``.
+
+    Also absent: ``interval_ms``. It lives on ``Replay`` rather than on
+    ``ReplayState``, and pacing is a server concern - ``status`` already says
+    whether auto-run is armed.
+    """
+
+    replay_id: str = Field(
+        description="Stable identity of this replay. Retained across reset, "
+                    "because a reset re-runs the same configuration rather than "
+                    "creating a new one."
+    )
+    status: Literal["idle", "running", "paused", "finished"] = Field(
+        description="Lifecycle state. 'running' means armed; Phase 17D adds no "
+                    "background worker, so the client drives progression through "
+                    "/api/replay/step."
+    )
+
+    dataset: ReplayDatasetModel
+    strategy: StrategyIdentityModel
+    execution: ExecutionIdentityModel
+
+    cursor: int = Field(
+        description="Index of the **execution** bar the next step will consume. "
+                    "The signal for that step is computed from candles[:cursor], "
+                    "so the newest bar the strategy sees is cursor - 1."
+    )
+    start_index: int
+    bars_processed: int = Field(description="cursor minus start_index.")
+
+    current_timestamp: datetime | None = Field(
+        default=None,
+        description="Time of the last bar a step actually consumed. Null before "
+                    "the first step.",
+    )
+    next_timestamp: datetime | None = Field(
+        default=None,
+        description="Time of the bar the next step will execute against. Null "
+                    "once the dataset is exhausted.",
+    )
+    next_candle_available: bool
+
+    starting_balance: float
+    balance: float = Field(
+        description="PaperBroker.cash. Realized only - the engine credits cash "
+                    "on close, so this excludes any unrealized amount."
+    )
+    realized_pnl: float = Field(
+        description="balance minus starting_balance - the engine's own "
+                    "BacktestResult.net_pnl definition."
+    )
+    trade_count: int = Field(ge=0)
+
+    has_open_position: bool
+    open_position: PositionResponse | None = Field(
+        default=None,
+        description="Reuses the Phase 16 position model. Cost fields and "
+                    "bars_held are omitted because PaperBroker computes them "
+                    "only at close.",
+    )
+    last_signal: ReplaySignalModel | None = Field(
+        default=None,
+        description="The most recent strategy observation. Null before the first "
+                    "step. Not an order and not a fill.",
+    )
+
+    @classmethod
+    def from_state(cls, state) -> "ReplayStateResponse":
+        """Build a response from an engine ``ReplayState``.
+
+        Timestamps are converted to aware UTC by the caller's helper so the
+        wire format matches every other Phase 16 endpoint. The engine keeps naive
+        UTC and is not modified.
+        """
+
+        from .marketdata import as_utc
+
+        signal = state.last_signal
+
+        return cls(
+            replay_id=state.replay_id,
+            status=state.status,
+            dataset=ReplayDatasetModel(
+                asset=state.dataset.asset,
+                timeframe=state.dataset.timeframe,
+                sha256=state.dataset.sha256,
+                first_timestamp=as_utc(state.dataset.first_timestamp),
+                last_timestamp=as_utc(state.dataset.last_timestamp),
+                candle_count=state.dataset.candle_count,
+                interval_seconds=state.dataset.interval_seconds,
+            ),
+            strategy=StrategyIdentityModel(**vars(state.strategy)),
+            execution=ExecutionIdentityModel(**vars(state.execution)),
+            cursor=state.cursor,
+            start_index=state.start_index,
+            bars_processed=state.bars_processed,
+            current_timestamp=(
+                as_utc(state.current_timestamp)
+                if state.current_timestamp is not None
+                else None
+            ),
+            next_timestamp=(
+                as_utc(state.next_timestamp)
+                if state.next_timestamp is not None
+                else None
+            ),
+            next_candle_available=state.next_candle_available,
+            starting_balance=state.starting_balance,
+            balance=state.balance,
+            realized_pnl=state.realized_pnl,
+            trade_count=state.trade_count,
+            has_open_position=state.has_open_position,
+            open_position=(
+                PositionResponse(
+                    side=state.open_position.side,
+                    entry_time=as_utc(state.open_position.entry_time),
+                    entry_price=state.open_position.entry_price,
+                    quantity=state.open_position.quantity,
+                    reason=state.open_position.reason,
+                    raw_entry_price=state.open_position.raw_entry_price,
+                    signal_close=state.open_position.signal_close,
+                    trend_state=state.open_position.trend_state,
+                    breakout_distance=state.open_position.breakout_distance,
+                    retest_distance=state.open_position.retest_distance,
+                    realised_volatility=state.open_position.realised_volatility,
+                    mean_range=state.open_position.mean_range,
+                    support_at_entry=state.open_position.support_at_entry,
+                    resistance_at_entry=state.open_position.resistance_at_entry,
+                )
+                if state.open_position is not None
+                else None
+            ),
+            last_signal=(
+                ReplaySignalModel(
+                    timestamp=as_utc(signal.timestamp),
+                    side=signal.side,
+                    reason=signal.reason,
+                    price=signal.price,
+                    support=signal.support,
+                    resistance=signal.resistance,
+                    trend=signal.trend,
+                    breakout=signal.breakout,
+                    retest=signal.retest,
+                    signal_close=signal.signal_close,
+                    trend_state=signal.trend_state,
+                    breakout_distance=signal.breakout_distance,
+                    retest_distance=signal.retest_distance,
+                    realised_volatility=signal.realised_volatility,
+                    mean_range=signal.mean_range,
+                )
+                if signal is not None
+                else None
+            ),
+        )

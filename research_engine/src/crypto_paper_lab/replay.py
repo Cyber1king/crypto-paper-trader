@@ -635,6 +635,18 @@ class Replay:
         return self._policy
 
     @property
+    def config(self) -> StrategyConfig:
+        """The strategy configuration driving this replay. Read-only.
+
+        Added in Phase 17D so a transport layer can build an account projection
+        that is guaranteed to describe *this* replay's configuration, rather than
+        re-declaring a default that could silently disagree with the replay it is
+        meant to be viewing.
+        """
+
+        return self._config
+
+    @property
     def ticker(self) -> Ticker:
         """The pacing object. Read-only; a replay never swaps it mid-run."""
 

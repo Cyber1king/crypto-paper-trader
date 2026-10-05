@@ -42,10 +42,16 @@ from datetime import datetime
 
 from fastapi import FastAPI, HTTPException, Query
 
+from crypto_paper_lab.replay import (
+    MAX_INTERVAL_MS,
+    MIN_INTERVAL_MS,
+    STATE_FINISHED,
+)
 from crypto_paper_lab.walkforward import config_hash
 
 from . import marketdata, perfstats, signals
 from .config import ApiConfig, config_from_env, SERVICE_NAME
+from .replaysession import ReplaySession
 from .schemas import (
     AccountResponse,
     CandleModel,
@@ -55,6 +61,7 @@ from .schemas import (
     MarketResponse,
     OpenPositionResponse,
     PositionResponse,
+    ReplayStateResponse,
     SessionResponse,
     SignalResponse,
     SignalSourceModel,
@@ -74,19 +81,36 @@ HEALTH_RESPONSE: dict[str, str] = {
     "service": "crypto-paper-lab",
 }
 
+#: Upper bound on a single ``/api/replay/step`` batch. Matches Phase 17A §4.2.
+#: A batch is N calls to the engine's own step, so this bounds work per request
+#: rather than changing behaviour.
+MAX_STEP_COUNT = 5000
+
 
 def create_app(
     config: ApiConfig | None = None,
     session: PaperSession | None = None,
+    replay: ReplaySession | None = None,
 ) -> FastAPI:
     """Build the application.
 
-    ``config`` and ``session`` are injectable so tests can construct the app
-    without reading the ambient environment or minting a session id.
+    ``config``, ``session`` and ``replay`` are injectable so tests can construct
+    the app without reading the ambient environment, minting a session id, or
+    loading the dataset.
+
+    ``session`` and ``replay`` are two *views* of one authoritative broker. When
+    a replay is supplied but no session, the session is derived from the replay's
+    broker so ``/api/account`` and ``/api/replay`` can never describe different
+    money. When neither is supplied, the original Phase 16 behaviour applies: a
+    standalone session, with no replay involved.
     """
 
     resolved = config or config_from_env()
-    paper_session = session or PaperSession(service=SERVICE_NAME)
+    replay_view = replay if replay is not None else ReplaySession()
+    # One session object, rebound in place by ReplaySession when a reset installs
+    # a new broker. The Phase 16 routes close over this exact object, so rebinding
+    # rather than replacing is what keeps their account view current.
+    paper_session = session or replay_view.session
 
     app = FastAPI(
         title="Crypto Paper Lab API",
@@ -100,6 +124,7 @@ def create_app(
     # Exposed for logging and for tests. Holds no secrets.
     app.state.config = resolved
     app.state.session = paper_session
+    app.state.replay = replay_view
 
     @app.get("/healthz", tags=["health"])
     def healthz() -> dict[str, str]:
@@ -407,6 +432,127 @@ def create_app(
             strategy=StrategyIdentityModel(**vars(view.strategy)),
             execution=ExecutionIdentityModel(**vars(view.execution)),
         )
+
+    # -----------------------------------------------------------------------
+    # replay (Phase 17D)
+    #
+    # Each handler below is a projection. It calls one method on ReplaySession,
+    # which calls one method on Replay, and returns the state the engine produced.
+    # There is no lifecycle logic, no step algorithm and no trading arithmetic in
+    # this section - that duplication is the failure mode the whole architecture
+    # exists to prevent.
+    # -----------------------------------------------------------------------
+
+    @app.get("/api/replay", response_model=ReplayStateResponse, tags=["replay"])
+    def replay_state() -> ReplayStateResponse:
+        """Authoritative replay state, read from ``Replay.state``."""
+
+        return ReplayStateResponse.from_state(replay_view.snapshot())
+
+    @app.post(
+        "/api/replay/start", response_model=ReplayStateResponse, tags=["replay"]
+    )
+    def replay_start(
+        interval_ms: int | None = Query(
+            default=None,
+            description=(
+                "Auto-run pace in milliseconds, "
+                f"{MIN_INTERVAL_MS}-{MAX_INTERVAL_MS}. Omit to keep the current "
+                "interval. Out of range is rejected, never clamped."
+            ),
+        ),
+    ) -> ReplayStateResponse:
+        """Arm auto-run. Delegates to ``Replay.start()`` unchanged.
+
+        A finished replay stays finished and unarmed, per the Phase 17C
+        transition table. Phase 17A section 21 still requires the transport to
+        report that as ``409 REPLAY_FINISHED``, so the refusal lives here rather
+        than in the engine - which is what lets both documents hold at once.
+        """
+
+        if replay_view.snapshot().status == STATE_FINISHED:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "REPLAY_FINISHED",
+                    "message": (
+                        "replay has reached the end of the dataset; reset it "
+                        "before starting again"
+                    ),
+                },
+            )
+
+        return ReplayStateResponse.from_state(replay_view.start(interval_ms))
+
+    @app.post(
+        "/api/replay/pause", response_model=ReplayStateResponse, tags=["replay"]
+    )
+    def replay_pause() -> ReplayStateResponse:
+        """Disarm auto-run. Delegates to ``Replay.pause()`` unchanged."""
+
+        return ReplayStateResponse.from_state(replay_view.pause())
+
+    @app.post(
+        "/api/replay/step", response_model=ReplayStateResponse, tags=["replay"]
+    )
+    def replay_step(
+        count: int = Query(
+            default=1,
+            ge=1,
+            le=MAX_STEP_COUNT,
+            description=(
+                f"Bars to advance, 1-{MAX_STEP_COUNT}. Batching is deterministic "
+                "because it is literally that many calls to the same method."
+            ),
+        ),
+    ) -> ReplayStateResponse:
+        """Advance the replay. Delegates to ``Replay.step()`` once per bar.
+
+        A batch is a loop over the engine's own step, not a faster algorithm, so
+        one ``count=40`` request and forty ``count=1`` requests leave the replay in
+        identical state.
+
+        The batch is **clamped to the bars that remain**, plus one step to let the
+        replay reach its terminal state. Two facts about the engine make the
+        ``+ 1`` necessary:
+
+        * The engine applies end-of-data closure on the call *after* the last bar
+          is consumed, so consuming every remaining bar leaves ``cursor`` at the
+          end while the status is not yet ``finished``.
+        * Without clamping, a 5000-bar request near the end would step until the
+          data ran out, the engine would refuse the next step, and the request
+          would answer 409 *after* having advanced the replay - telling the caller
+          it had failed while holding state it was never shown.
+
+        So a request that reaches or exceeds the end performs the final step and
+        returns ``finished``. A request that stays within the data performs
+        exactly the bars asked for.
+
+        Stepping a replay that is already finished is still a refusal: the engine
+        raises and the caller gets ``409 REPLAY_FINISHED``.
+        """
+
+        state = replay_view.snapshot()
+        remaining = max(state.dataset.candle_count - state.cursor, 0)
+        steps = count if count < remaining else remaining + 1
+
+        for _ in range(steps):
+            state = replay_view.step()
+
+        return ReplayStateResponse.from_state(state)
+
+    @app.post(
+        "/api/replay/reset", response_model=ReplayStateResponse, tags=["replay"]
+    )
+    def replay_reset() -> ReplayStateResponse:
+        """Rewind the replay. Delegates to ``Replay.reset()`` unchanged.
+
+        Returns ``409 POSITION_OPEN`` when a paper position is open. The engine
+        refuses rather than discarding the trade, and the API does not work around
+        that refusal.
+        """
+
+        return ReplayStateResponse.from_state(replay_view.reset())
 
     return app
 

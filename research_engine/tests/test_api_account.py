@@ -517,8 +517,17 @@ def test_endpoints_are_read_only(
 
 
 def test_no_order_or_execution_surface(closed_trades_client: TestClient) -> None:
+    """No order submission, and no route that *looks* like one.
+
+    ``/api/replay`` was on this list while it was deferred. Phase 17D added it as
+    a read-only control surface, so it now belongs with ``/api/session`` rather
+    than here. What must stay absent is anything that submits, fills or closes an
+    order.
+    """
+
     for path in (
-        "/orders", "/api/order", "/api/execute", "/api/replay",
+        "/orders", "/api/order", "/api/execute",
+        "/api/position/close", "/api/position/open",
         "/api/alerts", "/api/daily", "/api/manual", "/api/high-risk",
     ):
         assert closed_trades_client.get(path).status_code == 404, path
