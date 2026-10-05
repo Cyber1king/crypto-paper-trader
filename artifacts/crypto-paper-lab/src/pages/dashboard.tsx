@@ -1,475 +1,539 @@
-import React, { useState, useEffect } from 'react';
-import { Card, CardHeader, CardTitle, CardContent, Button, Badge, Input, Select } from '@/components/ui';
-import { usePaperEngine } from '@/lib/usePaperEngine';
-import { analyzeCandles } from '@/lib/analysis';
-import { generateSignal } from '@/lib/signals';
-import { ResponsiveContainer, ComposedChart, Line, Bar, XAxis, YAxis, Tooltip, CartesianGrid, ReferenceLine } from 'recharts';
-import { Beaker, TrendingUp, TrendingDown, Activity, AlertTriangle, Info, Clock, DollarSign, BarChart2, ShieldAlert } from 'lucide-react';
+/**
+ * The paper-trading dashboard (Phase 18).
+ *
+ * ## What changed, and why it is not a redesign
+ *
+ * The layout, theme tokens, typography and the Card/Badge vocabulary are the
+ * original dashboard's. What changed is where every number comes from.
+ *
+ * Previously this page imported `usePaperEngine`, `analyzeCandles` and
+ * `generateSignal` — a frontend reimplementation of the strategy, a
+ * `Math.sin(Date.now())` confidence value, a `Math.random()`-jittered candle feed,
+ * a $100,000 balance and a manual BUY/SELL panel. All of that is deleted.
+ *
+ * Now every figure is read from the Python paper engine, and where a figure is not
+ * available the page says so instead of inventing one.
+ *
+ * ## Mode handling
+ *
+ * The selected mode is a per-request parameter, never a "current mode" the server
+ * mutates — the same design the Python side uses, so switching modes here cannot
+ * reset or transfer anything.
+ *
+ * - Standard: `/api/replay?mode=standard` plus the Phase 16 projections.
+ * - AI Intelligence: `/api/ai` for the account, plus `/api/replay?mode=ai_intelligence`
+ *   for lifecycle. The two are shown in separate panels and never merged.
+ * - Alerts: `/api/modes` only. No replay request is issued, because the mode has no
+ *   session and the server would refuse it.
+ * - Reserved modes: `/api/modes` only. The server's note is shown; no execution is
+ *   attempted and no substitute is chosen.
+ */
+
+import { useCallback, useMemo, useState } from "react";
+import { Beaker, ShieldAlert, Wifi, WifiOff } from "lucide-react";
+
+import { Badge } from "@/components/ui";
+import { ErrorPanel, LoadingPanel, PaperOnlyBanner, UnavailableModePanel } from "@/components/state";
+import { ModeNote, ModeSelector } from "@/components/mode-selector";
+import { PaperControls, toRefusal } from "@/components/paper-controls";
+import { EngineConfigurationPanel, MarketChart } from "@/components/market-chart";
+import {
+  LastSignalPanel,
+  OpenPositionPanel,
+  ReplayProgressPanel,
+  StandardAccountPanel,
+  StatisticsPanel,
+  TradeJournalPanel,
+} from "@/components/standard-panels";
+import {
+  AiAccountPanel,
+  AiJournalPanel,
+  AiPositionsPanel,
+  AiReplayProgressPanel,
+  IntelligenceScorePanel,
+} from "@/components/ai-panels";
+import { AlertsPanel } from "@/components/alerts-panel";
+
+import {
+  describeError,
+  isApiError,
+  type ApiError,
+  type MarketQuery,
+  type ModeInfo,
+  type ModesResponse,
+} from "@/lib/api";
+import {
+  firstError,
+  queryKeys,
+  queryError,
+  useAiState,
+  useHealth,
+  useMarket,
+  useModes,
+  useReplayControls,
+  useReplayState,
+  useRunningPolling,
+  useSelectedMode,
+  useStandardAccount,
+  useStatistics,
+  useTrades,
+} from "@/lib/hooks";
+import { useQueryClient } from "@tanstack/react-query";
+
+/** Candles requested for the chart. The server's own maximum window. */
+const CHART_LIMIT = 200;
 
 export function Dashboard() {
-  const engine = usePaperEngine();
-  
-  const analysis = analyzeCandles(engine.candles);
-  const [signal, setSignal] = useState(generateSignal(engine.asset, engine.timeframe, analysis));
-  
-  useEffect(() => {
-    setSignal(generateSignal(engine.asset, engine.timeframe, analysis));
-  }, [engine.asset, engine.timeframe, engine.strategy, engine.candles]);
-  
-  const handleRegenerateSignal = () => {
-    setSignal(generateSignal(engine.asset, engine.timeframe, analysis));
-  };
-  
+  const queryClient = useQueryClient();
+
+  const [selectedMode, setSelectedMode] = useState<string>("standard");
+  const [stepCount, setStepCount] = useState(1);
+
+  const health = useHealth();
+  const modes = useModes();
+  const mode: ModeInfo | undefined = useSelectedMode(modes.data, selectedMode);
+
+  const isControllable = Boolean(mode?.available && mode.supports_execution);
+  const isAi = mode?.mode === "ai_intelligence";
+  const isAlerts = mode?.mode === "alerts";
+
+  // Alerts and reserved modes issue no replay request at all.
+  const replay = useReplayState(isControllable ? mode : undefined);
+
+  const ai = useAiState(isAi);
+
+  const account = useStandardAccount(mode?.mode === "standard");
+  const trades = useTrades(mode?.mode === "standard");
+  const statistics = useStatistics(mode?.mode === "standard");
+
+  // Keep the chart aligned to where the replay is, using the only parameter the
+  // API offers for it. Absent for modes with no replay, which is correct: the chart
+  // is dataset context, not mode state.
+  const chartQuery = useMemo<MarketQuery>(() => {
+    const end = replay.data?.current_timestamp ?? ai.data?.replay.current_timestamp;
+
+    return end
+      ? { limit: CHART_LIMIT, end }
+      : { limit: CHART_LIMIT };
+  }, [replay.data?.current_timestamp, ai.data?.replay.current_timestamp]);
+
+  const market = useMarket(chartQuery);
+
+  // Poll only while a replay is armed, so an idle dashboard makes no requests.
+  useRunningPolling(replay.data?.status ?? ai.data?.replay.status);
+
+  const controls = useReplayControls(isControllable ? mode : undefined, {
+    // The replay response is authoritative for the replay itself, but it does not
+    // contain AI's book, the account projection or the journal, so those are
+    // refreshed explicitly.
+    alsoRefresh: isAi
+      ? [queryKeys.ai()]
+      : [queryKeys.account(), queryKeys.trades(), queryKeys.statistics()],
+  });
+
+  const refusal = useMemo(
+    () =>
+      toRefusal(controls.start.error) ??
+      toRefusal(controls.pause.error) ??
+      toRefusal(controls.step.error) ??
+      toRefusal(controls.reset.error),
+    [
+      controls.start.error,
+      controls.pause.error,
+      controls.step.error,
+      controls.reset.error,
+    ],
+  );
+
+  const handleStep = useCallback(() => {
+    controls.step.mutate({ count: stepCount });
+  }, [controls.step, stepCount]);
+
+  const handleReset = useCallback(() => {
+    controls.reset.mutate();
+  }, [controls.reset]);
+
+  const handleModeSelect = useCallback(
+    (next: string) => {
+      setSelectedMode(next);
+      // Drop any cached read for the mode being left, so its figures cannot flash
+      // under the new mode's name.
+      void queryClient.removeQueries({ queryKey: queryKeys.replay(next) });
+    },
+    [queryClient],
+  );
+
+  const serviceError = firstError(health, modes);
+  const replayError = queryError(replay);
+  const aiError = queryError(ai);
+  const marketError = queryError(market);
+
+  const healthBadge = health.isLoading ? (
+    <Badge variant="outline" className="font-mono text-[10px] uppercase tracking-widest">
+      Checking…
+    </Badge>
+  ) : health.isError ? (
+    <Badge
+      variant="outline"
+      data-testid="health-offline"
+      className="font-mono text-[10px] uppercase tracking-widest border-destructive/40 text-destructive"
+    >
+      <WifiOff className="w-3 h-3 mr-1" aria-hidden="true" />
+      API offline
+    </Badge>
+  ) : (
+    <Badge
+      variant="outline"
+      data-testid="health-online"
+      className="font-mono text-[10px] uppercase tracking-widest border-success/40 text-success bg-success/10"
+    >
+      <Wifi className="w-3 h-3 mr-1" aria-hidden="true" />
+      API online
+    </Badge>
+  );
+
   return (
     <div className="min-h-screen bg-background flex flex-col font-sans">
-      {/* Header */}
-      <header className="border-b bg-card sticky top-0 z-10 px-6 py-4 flex items-center justify-between shadow-sm">
+      <header className="border-b bg-card sticky top-0 z-10 px-6 py-4 flex items-center justify-between gap-4 shadow-sm">
         <div className="flex items-center gap-3">
           <div className="bg-primary/10 p-2 rounded-md border border-primary/20">
-            <Beaker className="w-5 h-5 text-primary" />
+            <Beaker className="w-5 h-5 text-primary" aria-hidden="true" />
           </div>
           <div>
             <h1 className="font-bold text-lg tracking-tight">Crypto Paper Lab</h1>
             <p className="text-xs text-muted-foreground font-mono flex items-center gap-1 uppercase tracking-wider mt-0.5">
-              <ShieldAlert className="w-3 h-3" />
+              <ShieldAlert className="w-3 h-3" aria-hidden="true" />
               Simulated Environment
             </p>
           </div>
         </div>
-        
-        <div className="flex items-center gap-6">
-          <div className="text-right">
-            <div className="text-xs text-muted-foreground font-mono uppercase tracking-wider">Paper Balance</div>
-            <div className="font-mono text-xl font-bold tracking-tight text-primary">
-              ${engine.balance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-            </div>
-          </div>
-          <Button variant="outline" size="sm" onClick={engine.reset} className="font-mono text-xs uppercase tracking-wider h-8">
-            Reset Simulation
-          </Button>
+
+        <div className="flex items-center gap-4">
+          {healthBadge}
+          {StandardHeaderBalance(mode, replay.data, account.data)}
         </div>
       </header>
-      
-      {/* Warning Banner */}
-      <div className="bg-warning/10 border-b border-warning/20 px-6 py-2 flex items-center justify-center gap-2 text-warning-foreground text-sm font-medium">
-        <AlertTriangle className="w-4 h-4" />
-        This is a risk-free paper trading environment for educational research. No real capital is used or connected.
-      </div>
-      
-      <main className="flex-1 p-6 grid grid-cols-1 lg:grid-cols-12 gap-6 max-w-[1800px] mx-auto w-full">
-        
-        {/* Left Column: Config & Chart */}
-        <div className="lg:col-span-8 flex flex-col gap-6">
-          
-          {/* Top Controls */}
-          <Card>
-            <CardContent className="p-4 flex flex-wrap gap-4 items-end">
-              <div className="space-y-1.5 flex-1 min-w-[150px]">
-                <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Asset Pair</label>
-                <Select value={engine.asset} onChange={e => engine.setAsset(e.target.value)}>
-                  <option value="BTC">Bitcoin (BTC/USDT)</option>
-                  <option value="ETH">Ethereum (ETH/USDT)</option>
-                  <option value="SOL">Solana (SOL/USDT)</option>
-                </Select>
-              </div>
-              <div className="space-y-1.5 flex-1 min-w-[150px]">
-                <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Timeframe</label>
-                <Select value={engine.timeframe} onChange={e => engine.setTimeframe(e.target.value)}>
-                  <option value="15m">15 Minutes</option>
-                  <option value="1h">1 Hour</option>
-                  <option value="4h">4 Hours</option>
-                </Select>
-              </div>
-              <div className="space-y-1.5 flex-1 min-w-[150px]">
-                <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Strategy Profile</label>
-                <Select value={engine.strategy} onChange={e => engine.setStrategy(e.target.value)}>
-                  <option value="Trend Following">Trend Following</option>
-                  <option value="Mean Reversion">Mean Reversion</option>
-                  <option value="Breakout">Breakout Trader</option>
-                </Select>
-              </div>
-            </CardContent>
-          </Card>
-          
-          {/* Chart */}
-          <Card className="flex-1 min-h-[500px] flex flex-col overflow-hidden">
-            <CardHeader className="py-4 border-b flex flex-row items-center justify-between bg-muted/20">
-              <div className="flex items-center gap-4">
-                <CardTitle className="text-lg flex items-center gap-2">
-                  <Activity className="w-5 h-5 text-primary" />
-                  {engine.asset} Market Data
-                </CardTitle>
-                <Badge variant="outline" className="font-mono bg-background text-sm">
-                  {engine.currentPrice.toLocaleString(undefined, { style: 'currency', currency: 'USD' })}
-                </Badge>
-              </div>
-              <Badge variant="secondary" className="uppercase font-mono text-[10px] tracking-widest text-muted-foreground">
-                Synthetic OHLCV Feed
-              </Badge>
-            </CardHeader>
-            <CardContent className="p-0 flex-1 relative bg-card">
-              <div className="absolute inset-0 p-4">
-                <ResponsiveContainer width="100%" height="100%">
-                  <ComposedChart data={engine.candles}>
-                    <CartesianGrid strokeDasharray="3 3" opacity={0.15} vertical={false} />
-                    <XAxis dataKey="date" opacity={0.5} tick={{ fontSize: 11, fontFamily: 'var(--font-mono)' }} tickMargin={10} axisLine={false} tickLine={false} />
-                    <YAxis yAxisId="price" domain={['auto', 'auto']} orientation="right" tick={{ fontSize: 11, fontFamily: 'var(--font-mono)' }} strokeOpacity={0} tickFormatter={(val) => `$${val.toLocaleString()}`} />
-                    <YAxis yAxisId="volume" orientation="left" hide />
-                    
-                    <ReferenceLine y={analysis.resistance} yAxisId="price" stroke="hsl(var(--destructive))" strokeDasharray="4 4" label={{ position: 'insideTopLeft', value: 'RESISTANCE', fill: 'hsl(var(--destructive))', fontSize: 10, fontFamily: 'var(--font-mono)' }} opacity={0.6} />
-                    <ReferenceLine y={analysis.support} yAxisId="price" stroke="hsl(var(--success))" strokeDasharray="4 4" label={{ position: 'insideBottomLeft', value: 'SUPPORT', fill: 'hsl(var(--success))', fontSize: 10, fontFamily: 'var(--font-mono)' }} opacity={0.6} />
-                    
-                    <Tooltip 
-                       contentStyle={{ backgroundColor: 'hsl(var(--card))', borderColor: 'hsl(var(--border))', fontFamily: 'var(--font-mono)', fontSize: '12px', borderRadius: '8px', boxShadow: '0 4px 12px -2px rgb(0 0 0 / 0.1)' }}
-                       itemStyle={{ color: 'hsl(var(--foreground))' }}
-                       labelStyle={{ color: 'hsl(var(--muted-foreground))', marginBottom: '4px' }}
-                    />
-                    <Bar yAxisId="volume" dataKey="volume" fill="hsl(var(--primary))" opacity={0.15} />
-                    <Line yAxisId="price" type="monotone" dataKey="close" stroke="hsl(var(--primary))" strokeWidth={2.5} dot={false} activeDot={{ r: 6, fill: 'hsl(var(--primary))', stroke: 'hsl(var(--background))', strokeWidth: 3 }} />
-                  </ComposedChart>
-                </ResponsiveContainer>
-              </div>
-            </CardContent>
-          </Card>
-          
-          {/* Analysis Panel */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <Card>
-              <CardContent className="p-5 flex flex-col gap-2">
-                <span className="text-xs text-muted-foreground uppercase font-bold tracking-wider">Trend Analysis</span>
-                <div className="flex items-center gap-2 mt-1">
-                  {analysis.trend === 'Bullish' ? <TrendingUp className="w-6 h-6 text-success" /> : <TrendingDown className="w-6 h-6 text-destructive" />}
-                  <span className={`text-xl font-bold tracking-tight ${analysis.trend === 'Bullish' ? 'text-success' : 'text-destructive'}`}>{analysis.trend}</span>
-                </div>
-                <div className="text-xs text-muted-foreground font-mono mt-1 bg-muted p-1.5 rounded inline-flex w-fit">SMA20: ${analysis.sma20.toFixed(2)}</div>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardContent className="p-5 flex flex-col gap-2">
-                <span className="text-xs text-muted-foreground uppercase font-bold tracking-wider">Key Levels</span>
-                <div className="flex flex-col gap-1.5 mt-1 font-mono text-sm">
-                  <div className="flex justify-between items-center p-1 rounded hover:bg-muted/50 transition-colors">
-                    <span className="text-destructive font-bold text-xs">RESISTANCE</span>
-                    <span className="font-bold">${analysis.resistance.toFixed(2)}</span>
-                  </div>
-                  <div className="flex justify-between items-center p-1 rounded hover:bg-muted/50 transition-colors">
-                    <span className="text-success font-bold text-xs">SUPPORT</span>
-                    <span className="font-bold">${analysis.support.toFixed(2)}</span>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardContent className="p-5 flex flex-col gap-2">
-                <span className="text-xs text-muted-foreground uppercase font-bold tracking-wider">Market Structure</span>
-                <div className="flex flex-col gap-2.5 mt-1">
-                  <div className="flex items-center justify-between text-sm font-medium">
-                    <span>Breakout Zone</span>
-                    <Badge variant={analysis.breakout ? "default" : "outline"} className={analysis.breakout ? "bg-primary text-primary-foreground font-mono" : "font-mono"}>
-                      {analysis.breakout ? "ACTIVE" : "INACTIVE"}
-                    </Badge>
-                  </div>
-                  <div className="flex items-center justify-between text-sm font-medium">
-                    <span>Retest Phase</span>
-                    <Badge variant={analysis.retest ? "default" : "outline"} className="font-mono">
-                      {analysis.retest ? "ACTIVE" : "INACTIVE"}
-                    </Badge>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
+
+      <PaperOnlyBanner />
+
+      <main className="flex-1 p-6 flex flex-col gap-6 max-w-[1800px] mx-auto w-full">
+        {/* Mode selection, from GET /api/modes */}
+        <section className="flex flex-col gap-3">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <h2 className="text-xs font-bold uppercase tracking-widest text-muted-foreground">
+              Paper mode
+            </h2>
+            <Badge
+              variant="outline"
+              className="font-mono text-[10px] uppercase tracking-widest"
+              data-testid="default-mode-hint"
+            >
+              default: {modes.data?.default_mode ?? "—"}
+            </Badge>
           </div>
-          
-        </div>
-        
-        {/* Right Column: Execution & Journal */}
-        <div className="lg:col-span-4 flex flex-col gap-6">
-          
-          {/* AI Paper Signal */}
-          <Card className="border-primary/20 shadow-sm relative overflow-hidden">
-            <div className="absolute top-0 right-0 w-32 h-32 bg-primary/5 rounded-full -translate-y-1/2 translate-x-1/2 blur-2xl"></div>
-            <CardHeader className="py-4 border-b bg-primary/5 flex flex-row items-center justify-between relative z-10">
-              <CardTitle className="text-sm font-bold flex items-center gap-2 tracking-wide uppercase text-primary">
-                <Info className="w-4 h-4" />
-                Lab Generated Signal
-              </CardTitle>
-              <Button variant="ghost" size="icon" onClick={handleRegenerateSignal} className="h-7 w-7 text-primary hover:text-primary hover:bg-primary/10">
-                <Activity className="w-4 h-4" />
-              </Button>
-            </CardHeader>
-            <CardContent className="p-5 flex flex-col gap-5 relative z-10">
-              <div className="flex items-center justify-between bg-muted/50 p-3 rounded-lg border border-border/50">
-                <div className="text-xs text-muted-foreground font-bold font-mono tracking-wider">DIRECTION</div>
-                <Badge className={`text-sm px-3 py-1 uppercase tracking-widest ${
-                  signal.type === 'BUY' ? 'bg-success hover:bg-success/90 text-success-foreground' : 
-                  signal.type === 'SELL' ? 'bg-destructive hover:bg-destructive/90 text-destructive-foreground' : 
-                  'bg-warning text-warning-foreground hover:bg-warning/90'
-                }`}>
-                  {signal.type}
-                </Badge>
-              </div>
-              <div className="flex items-center justify-between px-1">
-                <div className="text-xs text-muted-foreground font-bold font-mono tracking-wider">CONFIDENCE SCORE</div>
-                <div className="font-mono font-bold text-2xl tracking-tighter text-foreground">{signal.confidence}%</div>
-              </div>
-              <div className="bg-background p-4 rounded-lg text-sm leading-relaxed text-muted-foreground border shadow-sm">
-                <span className="font-bold text-foreground uppercase text-xs tracking-wider block mb-1">Rationale</span>
-                {signal.reason}
-              </div>
-            </CardContent>
-          </Card>
-          
-          {/* Execution Panel */}
-          <PositionControls engine={engine} />
-          
-          {/* Active Positions */}
-          <ActivePositions engine={engine} />
-          
-        </div>
+
+          {modes.isLoading ? (
+            <LoadingPanel label="Loading modes" />
+          ) : modes.isError ? (
+            <ErrorPanel
+              error={queryError(modes) as ApiError}
+              title="Mode list unavailable"
+              onRetry={() => void modes.refetch()}
+            />
+          ) : (
+            <>
+              <ModeSelector
+                modes={modes.data}
+                selected={selectedMode}
+                onSelect={handleModeSelect}
+              />
+              <ModeNote mode={mode} />
+            </>
+          )}
+        </section>
+
+        {/* The service must be reachable before anything else means anything */}
+        {serviceError ? (
+          <ErrorPanel
+            error={serviceError}
+            title="Paper API unreachable"
+            onRetry={() => {
+              void health.refetch();
+              void modes.refetch();
+            }}
+          />
+        ) : null}
+
+        {/* Mode-specific body */}
+        {mode && !mode.available ? (
+          <UnavailableModePanel label={mode.label} note={mode.note} />
+        ) : isAlerts ? (
+          <AlertsPanel mode={mode} />
+        ) : isAi ? (
+          <AiBody
+            ai={ai.data}
+            isLoading={ai.isLoading}
+            error={aiError}
+            refusal={refusal}
+            controlsEnabled={Boolean(mode?.available && mode.supports_execution)}
+            modeLabel={mode?.label ?? "AI Intelligence"}
+            status={ai.data?.replay.status}
+            busy={controls.busy}
+            stepCount={stepCount}
+            onStepCountChange={setStepCount}
+            onStart={() => controls.start.mutate(undefined)}
+            onPause={() => controls.pause.mutate()}
+            onStep={handleStep}
+            onReset={handleReset}
+          />
+        ) : (
+          <StandardBody
+            mode={mode}
+            replay={replay.data}
+            replayLoading={replay.isLoading}
+            replayError={replayError}
+            refusal={refusal}
+            account={account.data}
+            trades={trades.data}
+            statistics={statistics.data}
+            controlsEnabled={Boolean(mode?.available && mode.supports_execution)}
+            modeLabel={mode?.label ?? "Standard"}
+            busy={controls.busy}
+            status={replay.data?.status}
+            stepCount={stepCount}
+            onStepCountChange={setStepCount}
+            onStart={() => controls.start.mutate(undefined)}
+            onPause={() => controls.pause.mutate()}
+            onStep={handleStep}
+            onReset={handleReset}
+          />
+        )}
+
+        {/* Chart is dataset context, shared by every mode */}
+        <section>
+          <MarketChart
+            market={market.data}
+            isLoading={market.isLoading}
+            error={marketError}
+            signal={replay.data?.last_signal ?? ai.data?.replay.last_signal ?? null}
+            asset={replay.data?.dataset.asset ?? ai.data?.replay.dataset.asset}
+            timeframe={replay.data?.dataset.timeframe ?? ai.data?.replay.dataset.timeframe}
+            onRetry={() => void market.refetch()}
+          />
+        </section>
       </main>
-      
-      {/* Bottom Full-width: Journal */}
-      <section className="px-6 pb-12 w-full max-w-[1800px] mx-auto">
-        <TradeJournal engine={engine} />
-      </section>
-      
     </div>
   );
 }
 
-function PositionControls({ engine }: { engine: ReturnType<typeof usePaperEngine> }) {
-  const [sizeStr, setSizeStr] = useState('10000');
-  
-  const handleOpen = (side: 'Long' | 'Short') => {
-    const size = parseFloat(sizeStr);
-    if (isNaN(size) || size <= 0) return;
-    engine.openPosition(side, size);
-  };
-  
-  return (
-    <Card className="shadow-sm">
-      <CardHeader className="py-4 border-b bg-card">
-        <CardTitle className="text-sm font-bold flex items-center gap-2 uppercase tracking-wide">
-          <DollarSign className="w-4 h-4 text-muted-foreground" />
-          Simulated Execution
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="p-5 flex flex-col gap-6">
-        <div className="space-y-2">
-          <label className="text-xs font-bold text-muted-foreground uppercase tracking-wider">Position Size (USD)</label>
-          <div className="relative">
-            <div className="absolute inset-y-0 left-0 flex items-center pl-4 pointer-events-none text-muted-foreground font-mono font-bold">
-              $
-            </div>
-            <Input 
-              type="number" 
-              value={sizeStr} 
-              onChange={e => setSizeStr(e.target.value)} 
-              className="pl-8 font-mono font-bold text-lg h-12 bg-muted/30 border-muted" 
-              max={engine.balance}
-            />
-          </div>
-          <div className="flex justify-between items-center text-xs">
-            <span className="text-muted-foreground font-medium">Available: <span className="font-mono text-foreground font-bold">${engine.balance.toLocaleString(undefined, {maximumFractionDigits:0})}</span></span>
-            <button onClick={() => setSizeStr((engine.balance).toString())} className="text-primary font-bold uppercase tracking-wider hover:underline">Max</button>
-          </div>
-        </div>
-        
-        <div className="grid grid-cols-2 gap-3">
-          <Button 
-            className="h-14 bg-success hover:bg-success/90 text-success-foreground font-bold tracking-wider text-xs sm:text-sm shadow-sm"
-            onClick={() => handleOpen('Long')}
-            disabled={parseFloat(sizeStr) > engine.balance || isNaN(parseFloat(sizeStr)) || parseFloat(sizeStr) <= 0}
-          >
-            PAPER BUY (LONG)
-          </Button>
-          <Button 
-            className="h-14 bg-destructive hover:bg-destructive/90 text-destructive-foreground font-bold tracking-wider text-xs sm:text-sm shadow-sm"
-            onClick={() => handleOpen('Short')}
-            disabled={parseFloat(sizeStr) > engine.balance || isNaN(parseFloat(sizeStr)) || parseFloat(sizeStr) <= 0}
-          >
-            PAPER SELL (SHORT)
-          </Button>
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
-function ActivePositions({ engine }: { engine: ReturnType<typeof usePaperEngine> }) {
-  if (engine.positions.length === 0) {
+/**
+ * The header balance.
+ *
+ * Shown only for Standard, because the header has one slot and the AI account must
+ * not be labelled Standard's balance. When Standard is not selected, no balance
+ * appears here at all rather than another mode's figure wearing its name.
+ */
+function StandardHeaderBalance(
+  mode: ModeInfo | undefined,
+  replay: { balance: number } | undefined,
+  account: { balance: number } | undefined,
+) {
+  if (mode?.mode !== "standard") {
     return (
-      <Card className="flex-1 flex flex-col shadow-sm">
-        <CardHeader className="py-4 border-b">
-          <CardTitle className="text-sm font-bold flex items-center gap-2 uppercase tracking-wide">
-            <Clock className="w-4 h-4 text-muted-foreground" />
-            Active Positions
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="p-10 flex-1 flex flex-col items-center justify-center text-center text-muted-foreground opacity-60 bg-muted/10">
-          <Clock className="w-10 h-10 mb-4 stroke-1" />
-          <p className="text-sm font-bold uppercase tracking-wider">No open positions</p>
-          <p className="text-xs mt-2 max-w-[200px]">Execute a paper trade to monitor its synthetic performance here.</p>
-        </CardContent>
-      </Card>
+      <div className="text-right" data-testid="header-no-balance">
+        <div className="text-xs text-muted-foreground font-mono uppercase tracking-wider">
+          Paper Balance
+        </div>
+        <div className="font-mono text-xl font-bold tracking-tight text-muted-foreground">
+          —
+        </div>
+        <div className="text-[10px] text-muted-foreground font-mono">
+          shown in the {mode?.label ?? "selected"} panel
+        </div>
+      </div>
     );
   }
-  
+
+  const balance = replay?.balance ?? account?.balance;
+
   return (
-    <Card className="flex-1 flex flex-col shadow-sm">
-      <CardHeader className="py-4 border-b">
-        <CardTitle className="text-sm font-bold flex items-center gap-2 uppercase tracking-wide">
-          <Clock className="w-4 h-4 text-muted-foreground" />
-          Active Positions <Badge variant="secondary" className="ml-1 font-mono">{engine.positions.length}</Badge>
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="p-0 overflow-y-auto max-h-[400px]">
-        <div className="flex flex-col">
-          {engine.positions.map(pos => {
-            const isLong = pos.side === 'Long';
-            const currentPnlPercent = isLong 
-              ? (engine.currentPrice - pos.entryPrice) / pos.entryPrice 
-              : (pos.entryPrice - engine.currentPrice) / pos.entryPrice;
-            const currentPnlUsd = currentPnlPercent * pos.size;
-            const isProfitable = currentPnlUsd >= 0;
-            
-            return (
-              <div key={pos.id} className="p-5 border-b last:border-0 hover:bg-muted/30 transition-colors">
-                <div className="flex justify-between items-start mb-4">
-                  <div className="flex items-center gap-3">
-                    <Badge variant="outline" className={`font-bold uppercase tracking-wider text-[10px] ${isLong ? 'text-success border-success/30 bg-success/10' : 'text-destructive border-destructive/30 bg-destructive/10'}`}>
-                      {pos.side}
-                    </Badge>
-                    <span className="font-bold text-lg">{pos.asset}</span>
-                  </div>
-                  <Button variant="outline" size="sm" onClick={() => engine.closePosition(pos.id)} className="h-8 text-xs font-bold tracking-wider hover:bg-destructive hover:text-destructive-foreground hover:border-destructive transition-colors">
-                    CLOSE
-                  </Button>
-                </div>
-                
-                <div className="grid grid-cols-2 gap-y-4 gap-x-2 text-sm">
-                  <div>
-                    <div className="text-[10px] uppercase font-bold text-muted-foreground tracking-wider mb-1">Position Size</div>
-                    <div className="font-mono font-medium">${pos.size.toLocaleString(undefined, {minimumFractionDigits: 2})}</div>
-                  </div>
-                  <div>
-                    <div className="text-[10px] uppercase font-bold text-muted-foreground tracking-wider mb-1">Entry Price</div>
-                    <div className="font-mono font-medium">${pos.entryPrice.toLocaleString(undefined, {minimumFractionDigits: 2})}</div>
-                  </div>
-                  <div className="col-span-2 bg-background p-3 rounded border">
-                    <div className="text-[10px] uppercase font-bold text-muted-foreground tracking-wider mb-1">Unrealized PnL</div>
-                    <div className={`font-mono font-bold text-lg flex items-center justify-between ${isProfitable ? 'text-success' : 'text-destructive'}`}>
-                      <span>{isProfitable ? '+' : ''}{currentPnlUsd.toLocaleString(undefined, {minimumFractionDigits: 2})} USD</span>
-                      <Badge variant="outline" className={`text-xs font-bold ${isProfitable ? 'border-success text-success' : 'border-destructive text-destructive'}`}>
-                        {isProfitable ? '+' : ''}{(currentPnlPercent * 100).toFixed(2)}%
-                      </Badge>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </CardContent>
-    </Card>
+    <div className="text-right">
+      <div className="text-xs text-muted-foreground font-mono uppercase tracking-wider">
+        Paper Balance
+      </div>
+      <div
+        className="font-mono text-xl font-bold tracking-tight text-primary"
+        data-testid="header-balance"
+      >
+        {balance === undefined
+          ? "—"
+          : balance.toLocaleString("en-US", {
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 2,
+            })}
+      </div>
+    </div>
   );
 }
 
-function TradeJournal({ engine }: { engine: ReturnType<typeof usePaperEngine> }) {
-  const [filter, setFilter] = useState('All');
-  
-  const filtered = engine.trades.filter(t => filter === 'All' || t.asset === filter);
-  
-  const totalTrades = engine.trades.length;
-  const wins = engine.trades.filter(t => t.pnl > 0).length;
-  const winRate = totalTrades > 0 ? (wins / totalTrades) * 100 : 0;
-  const totalPnl = engine.trades.reduce((sum, t) => sum + t.pnl, 0);
-  
+interface ControlsProps {
+  refusal: { code: string; message: string } | null;
+  controlsEnabled: boolean;
+  modeLabel: string;
+  status: "idle" | "running" | "paused" | "finished" | undefined;
+  busy: boolean;
+  stepCount: number;
+  onStepCountChange: (count: number) => void;
+  onStart: () => void;
+  onPause: () => void;
+  onStep: () => void;
+  onReset: () => void;
+}
+
+function StandardBody({
+  mode,
+  replay,
+  replayLoading,
+  replayError,
+  account,
+  trades,
+  statistics,
+  ...controls
+}: {
+  mode: ModeInfo | undefined;
+  replay: Parameters<typeof StandardAccountPanel>[0]["replay"];
+  replayLoading: boolean;
+  replayError: ApiError | null;
+  account: Parameters<typeof StandardAccountPanel>[0]["account"];
+  trades: Parameters<typeof TradeJournalPanel>[0]["trades"];
+  statistics: Parameters<typeof StatisticsPanel>[0]["statistics"];
+} & ControlsProps) {
   return (
-    <Card className="shadow-sm">
-      <CardHeader className="py-5 border-b bg-card">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <CardTitle className="text-lg flex items-center gap-2 uppercase tracking-wide">
-            <BarChart2 className="w-5 h-5 text-primary" />
-            Trade Journal & Analytics
-          </CardTitle>
-          <div className="flex flex-wrap gap-4 md:gap-6 items-center">
-            <div className="flex gap-1 bg-muted/50 p-1.5 rounded-lg border">
-              {['All', 'BTC', 'ETH', 'SOL'].map(f => (
-                <button 
-                  key={f}
-                  onClick={() => setFilter(f)}
-                  className={`px-4 py-1.5 rounded-md text-xs font-bold tracking-wider transition-colors ${filter === f ? 'bg-background shadow-sm text-foreground border-border/50' : 'text-muted-foreground hover:text-foreground hover:bg-background/50'}`}
-                >
-                  {f}
-                </button>
-              ))}
+    <div className="flex flex-col gap-6">
+<div className="border border-border rounded-lg px-4 py-3 bg-card">
+            <PaperControls
+              status={controls.status}
+              modeLabel={controls.modeLabel ?? mode?.label ?? "Standard"}
+              busy={controls.busy}
+              disabled={!controls.controlsEnabled}
+              disabledReason={
+                mode && !mode.supports_execution
+                  ? "This mode cannot execute paper trades, so no lifecycle controls are offered."
+                  : undefined
+              }
+          onStart={controls.onStart}
+          onPause={controls.onPause}
+          onStep={controls.onStep}
+          onReset={controls.onReset}
+          refusal={controls.refusal}
+          stepCount={controls.stepCount}
+          onStepCountChange={controls.onStepCountChange}
+        />
+      </div>
+
+      {replayError ? (
+        <ErrorPanel
+          error={replayError}
+          title="Replay state unavailable"
+          onRetry={() => void undefined}
+        />
+      ) : replayLoading && !replay ? (
+        <LoadingPanel label="Loading replay state" />
+      ) : (
+        <>
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+            <div className="lg:col-span-4 flex flex-col gap-6">
+              <StandardAccountPanel replay={replay} account={account} />
+              <OpenPositionPanel replay={replay} />
             </div>
-            
-            <div className="flex gap-4 items-center text-sm font-mono bg-muted/20 p-2 px-5 rounded-lg border">
-              <div className="flex flex-col items-center">
-                <span className="text-[10px] text-muted-foreground uppercase tracking-widest font-sans font-bold">Win Rate</span>
-                <span className="font-bold text-lg">{winRate.toFixed(1)}%</span>
-              </div>
-              <div className="w-px h-8 bg-border"></div>
-              <div className="flex flex-col items-center">
-                <span className="text-[10px] text-muted-foreground uppercase tracking-widest font-sans font-bold">Total PnL</span>
-                <span className={`font-bold text-lg ${totalPnl >= 0 ? 'text-success' : 'text-destructive'}`}>
-                  {totalPnl > 0 ? '+' : ''}{totalPnl.toLocaleString(undefined, {minimumFractionDigits: 2})}
-                </span>
-              </div>
+            <div className="lg:col-span-4 flex flex-col gap-6">
+              <LastSignalPanel signal={replay?.last_signal} />
+              <StatisticsPanel statistics={statistics} />
+            </div>
+            <div className="lg:col-span-4 flex flex-col gap-6">
+              <ReplayProgressPanel replay={replay} />
+              <EngineConfigurationPanel replay={replay} />
             </div>
           </div>
-        </div>
-      </CardHeader>
-      <CardContent className="p-0">
-        {engine.trades.length === 0 ? (
-          <div className="p-16 text-center text-muted-foreground bg-muted/5">
-            <p className="font-bold uppercase tracking-widest text-sm">No closed trades yet</p>
-            <p className="text-sm mt-2 max-w-[300px] mx-auto">Close a position to see its full lifecycle recorded in your research journal.</p>
-          </div>
-        ) : (
-          <div className="w-full overflow-x-auto">
-            <table className="w-full text-sm text-left">
-              <thead className="text-[10px] text-muted-foreground uppercase tracking-widest bg-muted/30 border-b">
-                <tr>
-                  <th className="px-6 py-4 font-bold">Time Closed</th>
-                  <th className="px-6 py-4 font-bold">Asset</th>
-                  <th className="px-6 py-4 font-bold">Side</th>
-                  <th className="px-6 py-4 font-bold text-right">Size</th>
-                  <th className="px-6 py-4 font-bold text-right">Entry</th>
-                  <th className="px-6 py-4 font-bold text-right">Exit</th>
-                  <th className="px-6 py-4 font-bold text-right">PnL (USD)</th>
-                </tr>
-              </thead>
-              <tbody className="font-mono text-sm">
-                {filtered.map(trade => {
-                  const isProfitable = trade.pnl >= 0;
-                  return (
-                    <tr key={trade.id} className="border-b last:border-0 hover:bg-muted/10 transition-colors">
-                      <td className="px-6 py-4 whitespace-nowrap text-muted-foreground text-xs font-sans">
-                        {new Date(trade.closedAt).toLocaleTimeString()}
-                      </td>
-                      <td className="px-6 py-4 font-bold font-sans">{trade.asset}</td>
-                      <td className="px-6 py-4">
-                        <Badge variant="outline" className={`font-bold font-sans uppercase tracking-wider text-[10px] ${trade.side === 'Long' ? 'text-success border-success/30 bg-success/5' : 'text-destructive border-destructive/30 bg-destructive/5'}`}>
-                          {trade.side}
-                        </Badge>
-                      </td>
-                      <td className="px-6 py-4 text-right">${trade.size.toLocaleString(undefined, {maximumFractionDigits: 0})}</td>
-                      <td className="px-6 py-4 text-right text-muted-foreground">${trade.entryPrice.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
-                      <td className="px-6 py-4 text-right text-muted-foreground">${trade.exitPrice.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
-                      <td className={`px-6 py-4 text-right font-bold ${isProfitable ? 'text-success' : 'text-destructive'}`}>
-                        {isProfitable ? '+' : ''}{trade.pnl.toLocaleString(undefined, {minimumFractionDigits: 2})}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </CardContent>
-    </Card>
+
+          <TradeJournalPanel trades={trades} />
+        </>
+      )}
+    </div>
   );
 }
+
+function AiBody({
+  ai,
+  isLoading,
+  error,
+  refusal,
+  controlsEnabled,
+  modeLabel,
+  status,
+  busy,
+  stepCount,
+  onStepCountChange,
+  onStart,
+  onPause,
+  onStep,
+  onReset,
+}: {
+  ai: Parameters<typeof AiAccountPanel>[0]["ai"];
+  isLoading: boolean;
+  error: ApiError | null;
+} & ControlsProps) {
+  return (
+    <div className="flex flex-col gap-6">
+      <div className="border border-border rounded-lg px-4 py-3 bg-card">
+        <PaperControls
+          status={status}
+          modeLabel={modeLabel}
+          busy={busy}
+          disabled={!controlsEnabled}
+          onStart={onStart}
+          onPause={onPause}
+          onStep={onStep}
+          onReset={onReset}
+          refusal={refusal}
+          stepCount={stepCount}
+          onStepCountChange={onStepCountChange}
+        />
+        <p className="text-[11px] text-muted-foreground mt-3 border-l-2 border-primary/40 pl-3 leading-relaxed">
+          These controls drive the AI mode&apos;s own replay through the shared
+          transport (<code className="font-mono">?mode=ai_intelligence</code>). Its
+          paper account and positions are reported separately by{" "}
+          <code className="font-mono">GET /api/ai</code> — never from this replay&apos;s
+          broker, which the mode keeps permanently flat.
+        </p>
+      </div>
+
+      {error ? (
+        <ErrorPanel error={error} title="AI state unavailable" />
+      ) : isLoading && !ai ? (
+        <LoadingPanel label="Loading AI state" />
+      ) : (
+        <>
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+            <div className="lg:col-span-4 flex flex-col gap-6">
+              <AiAccountPanel ai={ai} />
+            </div>
+            <div className="lg:col-span-4 flex flex-col gap-6">
+              <IntelligenceScorePanel score={ai?.last_score} />
+            </div>
+            <div className="lg:col-span-4 flex flex-col gap-6">
+              <AiReplayProgressPanel ai={ai} />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <AiPositionsPanel ai={ai} />
+            <AiJournalPanel ai={ai} />
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+export { describeError, isApiError };
