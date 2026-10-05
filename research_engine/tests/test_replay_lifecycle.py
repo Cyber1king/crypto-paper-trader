@@ -1207,7 +1207,7 @@ class TestSafetyAndScope:
         replay = make()
 
         assert replay.policy is AUTOMATIC_POLICY
-        assert replay.policy.allow_entry is True
+        assert replay.policy.max_positions == 1
 
     def test_no_real_money_or_execution_path(self) -> None:
         code = code_only(REPLAY_SOURCE)

@@ -38,9 +38,9 @@ from crypto_paper_lab.dataset import load_dataset
 from crypto_paper_lab.models import PaperTrade
 from crypto_paper_lab.replay import (
     AUTOMATIC_POLICY,
+    DisabledPolicy,
     STATE_FINISHED,
     STATE_IDLE,
-    ExecutionPolicy,
     InvalidStartIndexError,
     PositionOpenError,
     Replay,
@@ -1212,6 +1212,9 @@ class TestSafety:
         engine_modules = {
             "backtest",
             "costs",
+            # Phase 17E: the execution-policy seam. Added deliberately and
+            # enumerated, exactly like every other engine module.
+            "execution",
             "models",
             "simulator",
             "strategy",
@@ -1418,14 +1421,15 @@ class TestExecutionPolicy:
         replay = new_replay()
 
         assert replay.policy is AUTOMATIC_POLICY
-        assert replay.policy.allow_entry is True
+        assert replay.policy.name == "automatic"
+        assert replay.policy.max_positions == 1
 
     def test_a_refusing_policy_produces_signals_but_no_trades(self) -> None:
         """What a future Manual mode needs: observe without executing."""
 
         replay = new_replay(
             SOURCE[:400],
-            policy=ExecutionPolicy(name="manual", allow_entry=False),
+            policy=DisabledPolicy(name="manual"),
         )
         signals = 0
 
@@ -1445,7 +1449,7 @@ class TestExecutionPolicy:
     def test_a_refusing_policy_never_calls_the_broker(self) -> None:
         replay = new_replay(
             SOURCE[:400],
-            policy=ExecutionPolicy(name="alerts", allow_entry=False),
+            policy=DisabledPolicy(name="alerts"),
         )
         calls = []
         replay.broker.open_from_signal = lambda *a, **k: calls.append(a)
@@ -1457,5 +1461,7 @@ class TestExecutionPolicy:
         assert calls == []
 
     def test_policy_must_be_named(self) -> None:
+        """Phase 17E: identity is mandatory, so a policy is never anonymous."""
+
         with pytest.raises(ValueError):
-            ExecutionPolicy(name="", allow_entry=True)
+            DisabledPolicy(name="")

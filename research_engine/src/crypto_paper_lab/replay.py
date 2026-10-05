@@ -77,6 +77,13 @@ from .backtest import (
     _side_allowed,
 )
 from .costs import TradingCosts
+from .execution import (
+    AUTOMATIC_POLICY,
+    DecisionContext,
+    DisabledPolicy,
+    ExecutionPolicy,
+    ExitCandidate,
+)
 from .models import Candle, PaperTrade, Signal
 from .simulator import PaperBroker
 from .strategy import StrategyConfig, analyze
@@ -93,6 +100,8 @@ from .walkforward import (
 
 __all__ = [
     "AUTOMATIC_POLICY",
+    "DecisionContext",
+    "DisabledPolicy",
     "DEFAULT_INTERVAL_MS",
     "MAX_INTERVAL_MS",
     "MIN_INTERVAL_MS",
@@ -218,37 +227,12 @@ class InvalidIntervalError(ReplayError):
 # ---------------------------------------------------------------------------
 # Execution policy
 # ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class ExecutionPolicy:
-    """Whether an eligible signal becomes a paper trade.
-
-    Phase 17A §6 requires this to be an explicit, swappable object rather than an
-    inlined block, for two reasons that are both about *future* modes:
-
-    * A **Manual** policy sets ``allow_entry=False``. It would display the signal
-      and never trade it. With the rule inlined there is no way to express that.
-    * An **Alerts** consumer must be structurally incapable of execution. Keeping
-      the decision in a named object is what lets a later phase assert, by
-      inspection, that nothing else in the system can open a trade.
-
-    ``allow_entry=False`` is the entire mechanism Manual needs, so it is the
-    entire mechanism provided. Adding a richer decision type now would be
-    speculative.
-    """
-
-    name: str
-    allow_entry: bool
-
-    def __post_init__(self) -> None:
-        if not self.name:
-            raise ValueError("execution policy must be named")
-
-
-#: Reproduces ``run_backtest``: any eligible non-flat signal opens a position.
-#: The only policy that exists in Phase 17B.
-AUTOMATIC_POLICY = ExecutionPolicy(name="automatic", allow_entry=True)
+#
+# The policy interface itself lives in ``execution.py`` (Phase 17E) and is
+# re-exported here for backwards compatibility. Phase 17B introduced an inline
+# ``ExecutionPolicy(name, allow_entry)`` in this module; Phase 17E replaced that
+# two-field stub with the real seam and kept the names importable from here so
+# existing callers and tests continue to resolve.
 
 
 # ---------------------------------------------------------------------------
@@ -972,7 +956,10 @@ class Replay:
         config = self._config
         trade = broker.open_trade
         bars_held = index - self._entry_index
-        exit_reason: str | None = None
+
+        # Engine-detected exits, in the engine's own precedence order. The
+        # policy selects among these; it cannot invent one.
+        candidates: list[ExitCandidate] = []
 
         # Exit rules are never evaluated on the entry bar (backtest.py:158).
         if bars_held >= 1:
@@ -982,7 +969,7 @@ class Replay:
                 config.max_holding_bars is not None
                 and bars_held >= config.max_holding_bars
             ):
-                exit_reason = MAX_HOLDING
+                candidates.append(ExitCandidate(MAX_HOLDING, bars_held))
             elif (
                 config.stop_loss_pct is not None
                 or config.take_profit_pct is not None
@@ -991,29 +978,40 @@ class Replay:
                 stop_hit, target_hit = _levels_breached(
                     trade, closed_bar, config
                 )
+                # Conservative: the stop is assumed reached first.
                 if stop_hit:
-                    exit_reason = STOP_LOSS
+                    candidates.append(ExitCandidate(STOP_LOSS, bars_held))
                 elif target_hit:
-                    exit_reason = TAKE_PROFIT
+                    candidates.append(ExitCandidate(TAKE_PROFIT, bars_held))
 
-        if exit_reason is None and (
+        if (
             signal.side in {"long", "short"}
             and signal.side != trade.side
         ):
-            exit_reason = OPPOSITE_SIGNAL
+            candidates.append(ExitCandidate(OPPOSITE_SIGNAL, bars_held))
 
-        if exit_reason is None:
+        if not candidates:
+            return None
+
+        choice = self._policy.select_exit(
+            self._decision_context(
+                index, signal, candidates, bars_held, trade.side
+            )
+        )
+
+        if choice is None:
+            # The policy declined every detected exit and chose to hold.
             return None
 
         closed = broker.close(execution_bar.open, execution_bar.timestamp)
         # The broker does not write these; run_backtest sets them after the close
         # returns (backtest.py:188-189) and so must replay.
-        closed.exit_reason = exit_reason
+        closed.exit_reason = choice.reason
         closed.bars_held = bars_held
 
         self._entry_index = None
-        self._exit_counts[exit_reason] = (
-            self._exit_counts.get(exit_reason, 0) + 1
+        self._exit_counts[choice.reason] = (
+            self._exit_counts.get(choice.reason, 0) + 1
         )
 
         return closed
@@ -1021,7 +1019,12 @@ class Replay:
     def _maybe_enter(
         self, index: int, signal: Signal, execution_bar: Candle
     ) -> PaperTrade | None:
-        """Entry evaluation. Runs after any close, in the same step."""
+        """Entry evaluation. Runs after any close, in the same step.
+
+        The engine's configuration gates are applied *before* the policy is
+        consulted, so a decision the policy does make is genuinely the policy's
+        and not a re-decision of engine configuration.
+        """
 
         broker = self._broker
 
@@ -1031,9 +1034,6 @@ class Replay:
         if signal.side not in {"long", "short"}:
             return None
 
-        if not self._policy.allow_entry:
-            return None
-
         if not _side_allowed(signal.side, self._config):
             return None
 
@@ -1041,6 +1041,15 @@ class Replay:
             self._evaluation_start is not None
             and index < self._evaluation_start
         ):
+            return None
+
+        decision = self._policy.should_enter(
+            self._decision_context(
+                index, signal, (), None, position_side=None
+            )
+        )
+
+        if not decision:
             return None
 
         # ``replace`` is pure, so building this only when an entry will actually
@@ -1057,6 +1066,34 @@ class Replay:
         self._entry_index = index
 
         return opened
+
+    def _decision_context(
+        self,
+        index: int,
+        signal: Signal,
+        candidates: list,
+        bars_held: int | None,
+        position_side: str | None,
+    ) -> DecisionContext:
+        """Build the immutable context a policy decides from.
+
+        Carries derived values only. No candle, broker or replay reference is
+        passed, so a policy cannot mutate engine state or read a bar the strategy
+        has not already seen.
+        """
+
+        return DecisionContext(
+            evaluation_index=index,
+            signal_side=signal.side,
+            signal_reason=signal.reason,
+            signal_price=signal.price,
+            signal_timestamp=signal.timestamp,
+            has_open_position=self._broker.open_trade is not None,
+            position_side=position_side,
+            bars_held=bars_held,
+            exit_candidates=tuple(candidates),
+            risk_fraction=self._risk_fraction,
+        )
 
     def _finish(self) -> StepResult:
         """Apply end-of-data closure and mark the replay finished.
