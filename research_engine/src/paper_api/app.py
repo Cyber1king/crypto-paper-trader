@@ -47,18 +47,28 @@ from crypto_paper_lab.replay import (
     MIN_INTERVAL_MS,
     STATE_FINISHED,
 )
+from crypto_paper_lab.modes import (
+    DEFAULT_MODE,
+    ModeError,
+    ModeSpec,
+    mode_spec,
+)
 from crypto_paper_lab.walkforward import config_hash
 
 from . import marketdata, perfstats, signals
 from .config import ApiConfig, config_from_env, SERVICE_NAME
+from .moderegistry import ModeRegistry
 from .replaysession import ReplaySession
 from .schemas import (
     AccountResponse,
+    AiStateResponse,
     CandleModel,
     CostTotalsModel,
     ExecutionIdentityModel,
     MarketMetadataModel,
     MarketResponse,
+    ModeInfoModel,
+    ModesResponse,
     OpenPositionResponse,
     PositionResponse,
     ReplayStateResponse,
@@ -91,26 +101,44 @@ def create_app(
     config: ApiConfig | None = None,
     session: PaperSession | None = None,
     replay: ReplaySession | None = None,
+    registry: ModeRegistry | None = None,
 ) -> FastAPI:
     """Build the application.
 
-    ``config``, ``session`` and ``replay`` are injectable so tests can construct
-    the app without reading the ambient environment, minting a session id, or
-    loading the dataset.
+    ``config``, ``session``, ``replay`` and ``registry`` are injectable so tests can
+    construct the app without reading the ambient environment, minting a session
+    id, or loading the dataset.
 
-    ``session`` and ``replay`` are two *views* of one authoritative broker. When
-    a replay is supplied but no session, the session is derived from the replay's
-    broker so ``/api/account`` and ``/api/replay`` can never describe different
-    money. When neither is supplied, the original Phase 16 behaviour applies: a
-    standalone session, with no replay involved.
+    ``registry`` owns every mode's isolated session. When a single ``replay`` is
+    injected it becomes the **Standard** mode's session, so a test that prepared one
+    replay gets exactly that one back from the default-mode routes. When neither is
+    supplied the registry builds a session per mode on first use.
     """
 
     resolved = config or config_from_env()
-    replay_view = replay if replay is not None else ReplaySession()
-    # One session object, rebound in place by ReplaySession when a reset installs
-    # a new broker. The Phase 16 routes close over this exact object, so rebinding
-    # rather than replacing is what keeps their account view current.
-    paper_session = session or replay_view.session
+
+    if registry is not None:
+        mode_registry = registry
+    elif replay is not None:
+        # An injected replay stands for Standard only. Every other executable
+        # mode still gets its own freshly built session, so selecting AI cannot
+        # hand back the Standard replay - and with it the Standard policy,
+        # broker and cursor.
+        def build(mode: str) -> ReplaySession:
+            if mode == DEFAULT_MODE:
+                return replay
+            return ModeRegistry()._default_session(mode)
+
+        mode_registry = ModeRegistry(session_for=build)
+    else:
+        mode_registry = ModeRegistry()
+
+    # One session object per mode, rebound in place when a reset installs a new
+    # broker. The Phase 16 routes close over Standard's exact object, so
+    # rebinding rather than replacing is what keeps their account view current.
+    # They describe Standard: the Phase 16 routes carry no mode parameter, and
+    # /api/replay with no parameter also selects Standard, so the two agree.
+    paper_session = session or mode_registry.paper_session()
 
     app = FastAPI(
         title="Crypto Paper Lab API",
@@ -124,7 +152,9 @@ def create_app(
     # Exposed for logging and for tests. Holds no secrets.
     app.state.config = resolved
     app.state.session = paper_session
-    app.state.replay = replay_view
+    app.state.modes = mode_registry
+    # The Standard mode's session, kept for continuity with Phase 17D callers.
+    app.state.replay = mode_registry.standard_session()
 
     @app.get("/healthz", tags=["health"])
     def healthz() -> dict[str, str]:
@@ -434,20 +464,101 @@ def create_app(
         )
 
     # -----------------------------------------------------------------------
-    # replay (Phase 17D)
+    # modes and replay (Phase 17D transport, Phase 17F mode isolation)
     #
-    # Each handler below is a projection. It calls one method on ReplaySession,
-    # which calls one method on Replay, and returns the state the engine produced.
-    # There is no lifecycle logic, no step algorithm and no trading arithmetic in
-    # this section - that duplication is the failure mode the whole architecture
-    # exists to prevent.
+    # Each handler below is a projection. It resolves a mode to that mode's own
+    # ReplaySession, calls one method on it, and returns the state the engine
+    # produced. There is no lifecycle logic, no step algorithm, no trading
+    # arithmetic and no per-mode state here - the duplication this project exists
+    # to prevent has nowhere to live in this section.
+    #
+    # Mode selection is a per-request parameter, never a "current mode" variable.
+    # That is what makes switching safe by construction: there is no switch to
+    # mutate, so choosing a mode cannot rewind, close or transfer anything.
     # -----------------------------------------------------------------------
 
-    @app.get("/api/replay", response_model=ReplayStateResponse, tags=["replay"])
-    def replay_state() -> ReplayStateResponse:
-        """Authoritative replay state, read from ``Replay.state``."""
+    def _mode_of(mode: str | None) -> str:
+        """Resolve the requested mode, defaulting to Standard.
 
-        return ReplayStateResponse.from_state(replay_view.snapshot())
+        The default is what preserves pre-17F behaviour: a client that has never
+        heard of modes gets the same replay it always did.
+        """
+
+        return DEFAULT_MODE if mode is None else mode
+
+    def _session_of(mode: str | None) -> tuple:
+        """Resolve a mode to its isolated session, or refuse with HTTP.
+
+        An unknown mode and a reserved or brokerless mode are both refusals, but
+        with different codes so a client can tell "no such mode" from "not built
+        yet" from "that mode does not trade".
+        """
+
+        name = _mode_of(mode)
+
+        try:
+            return name, mode_registry.session(name)
+        except ModeError as exc:
+            status = (
+                422
+                if getattr(exc, "code", "") == "INVALID_MODE"
+                else 409
+            )
+            raise HTTPException(
+                status_code=status,
+                detail={"code": exc.code, "message": str(exc)},
+            ) from exc
+
+    @app.get("/api/modes", response_model=ModesResponse, tags=["modes"])
+    def available_modes() -> ModesResponse:
+        """Every recognised paper mode. Discovery only; no session state.
+
+        Reserved modes are included and flagged rather than hidden, so a client
+        can tell "coming later" from "does not exist".
+        """
+
+        return ModesResponse(
+            default_mode=DEFAULT_MODE,
+            modes=[
+                ModeInfoModel(**spec.identity())
+                for spec in mode_registry.specs()
+            ],
+        )
+
+    @app.get("/api/ai", response_model=AiStateResponse, tags=["replay"])
+    def ai_state() -> AiStateResponse:
+        """AI Intelligence's authoritative mode state. Read-only.
+
+        Added in Phase 17G because the AI contract genuinely exists now and a
+        client needs it. It is a projection of two authoritative objects and
+        nothing else: ``AiPaperBook`` for capital, positions and realised P&L, and
+        the mode's replay for the cursor and lifecycle.
+
+        **It computes nothing.** No score, no quantity, no P&L, no exit. The
+        intelligence score in particular is read from the book's last score; if
+        this route recomputed it, there would be a second scoring implementation
+        that could disagree with the one that decided the trades.
+
+        A separate route rather than extra fields on ``/api/replay``, because
+        ``ReplayStateResponse`` is a faithful projection of ``ReplayState`` and the
+        AI contract is not part of that dataclass. Widening it would make every
+        mode's response carry fields that are false for all of them.
+        """
+
+        return AiStateResponse.from_ai(mode_registry.ai_session())
+
+    @app.get("/api/replay", response_model=ReplayStateResponse, tags=["replay"])
+    def replay_state(
+        mode: str | None = Query(
+            default=None,
+            description="Paper mode. Omit for Standard.",
+        ),
+    ) -> ReplayStateResponse:
+        """Authoritative replay state for one mode, read from ``Replay.state``."""
+
+        name, view = _session_of(mode)
+
+        return ReplayStateResponse.from_state(view.snapshot(), mode=name)
 
     @app.post(
         "/api/replay/start", response_model=ReplayStateResponse, tags=["replay"]
@@ -461,8 +572,11 @@ def create_app(
                 "interval. Out of range is rejected, never clamped."
             ),
         ),
+        mode: str | None = Query(
+            default=None, description="Paper mode. Omit for Standard."
+        ),
     ) -> ReplayStateResponse:
-        """Arm auto-run. Delegates to ``Replay.start()`` unchanged.
+        """Arm auto-run for one mode. Delegates to ``Replay.start()`` unchanged.
 
         A finished replay stays finished and unarmed, per the Phase 17C
         transition table. Phase 17A section 21 still requires the transport to
@@ -470,7 +584,9 @@ def create_app(
         than in the engine - which is what lets both documents hold at once.
         """
 
-        if replay_view.snapshot().status == STATE_FINISHED:
+        name, view = _session_of(mode)
+
+        if view.snapshot().status == STATE_FINISHED:
             raise HTTPException(
                 status_code=409,
                 detail={
@@ -482,15 +598,23 @@ def create_app(
                 },
             )
 
-        return ReplayStateResponse.from_state(replay_view.start(interval_ms))
+        return ReplayStateResponse.from_state(
+            view.start(interval_ms), mode=name
+        )
 
     @app.post(
         "/api/replay/pause", response_model=ReplayStateResponse, tags=["replay"]
     )
-    def replay_pause() -> ReplayStateResponse:
-        """Disarm auto-run. Delegates to ``Replay.pause()`` unchanged."""
+    def replay_pause(
+        mode: str | None = Query(
+            default=None, description="Paper mode. Omit for Standard."
+        ),
+    ) -> ReplayStateResponse:
+        """Disarm auto-run for one mode. Delegates to ``Replay.pause()``."""
 
-        return ReplayStateResponse.from_state(replay_view.pause())
+        name, view = _session_of(mode)
+
+        return ReplayStateResponse.from_state(view.pause(), mode=name)
 
     @app.post(
         "/api/replay/step", response_model=ReplayStateResponse, tags=["replay"]
@@ -505,8 +629,11 @@ def create_app(
                 "because it is literally that many calls to the same method."
             ),
         ),
+        mode: str | None = Query(
+            default=None, description="Paper mode. Omit for Standard."
+        ),
     ) -> ReplayStateResponse:
-        """Advance the replay. Delegates to ``Replay.step()`` once per bar.
+        """Advance one mode's replay. Delegates to ``Replay.step()`` per bar.
 
         A batch is a loop over the engine's own step, not a faster algorithm, so
         one ``count=40`` request and forty ``count=1`` requests leave the replay in
@@ -530,29 +657,53 @@ def create_app(
 
         Stepping a replay that is already finished is still a refusal: the engine
         raises and the caller gets ``409 REPLAY_FINISHED``.
+
+        Phase 17G: for ``mode=ai_intelligence`` this also advances that mode's
+        position book, because ``AiSession.step()`` moves the replay and the book
+        together in one call. AI's capital and positions are then read from
+        ``/api/ai``, not from this response - this response remains a projection of
+        ``Replay.state``, which is what it has always been.
         """
 
-        state = replay_view.snapshot()
+        name, view = _session_of(mode)
+        state = view.snapshot()
+
         remaining = max(state.dataset.candle_count - state.cursor, 0)
         steps = count if count < remaining else remaining + 1
 
         for _ in range(steps):
-            state = replay_view.step()
+            state = view.step()
 
-        return ReplayStateResponse.from_state(state)
+        return ReplayStateResponse.from_state(state, mode=name)
 
     @app.post(
         "/api/replay/reset", response_model=ReplayStateResponse, tags=["replay"]
     )
-    def replay_reset() -> ReplayStateResponse:
-        """Rewind the replay. Delegates to ``Replay.reset()`` unchanged.
+    def replay_reset(
+        mode: str | None = Query(
+            default=None, description="Paper mode. Omit for Standard."
+        ),
+    ) -> ReplayStateResponse:
+        """Rewind one mode. Delegates to ``Replay.reset()`` unchanged.
 
-        Returns ``409 POSITION_OPEN`` when a paper position is open. The engine
-        refuses rather than discarding the trade, and the API does not work around
-        that refusal.
+        Applies to the named mode only: no other mode's cursor, journal or
+        position is touched, because no other mode's broker is reachable from here.
+
+        Returns ``409 POSITION_OPEN`` when that mode holds an open paper position.
+        The engine refuses rather than discarding the trade, and the API does not
+        work around that refusal.
+
+        Phase 17G: ``mode=ai_intelligence`` resets the AI book too. It closes open
+        positions at the final candle's close and records the reason and realised
+        P&L before clearing, rather than discarding them - committed capital must
+        never outlive the position that was holding it. The AI replay's own broker
+        is never open, so ``Replay.reset()``'s ``POSITION_OPEN`` refusal cannot fire
+        for this mode.
         """
 
-        return ReplayStateResponse.from_state(replay_view.reset())
+        name, view = _session_of(mode)
+
+        return ReplayStateResponse.from_state(view.reset(), mode=name)
 
     return app
 

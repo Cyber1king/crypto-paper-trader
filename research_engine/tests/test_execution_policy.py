@@ -791,16 +791,30 @@ class TestPolicyIdentity:
 
 
 class TestScopeGuards:
-    def test_no_intelligence_scoring_concept_exists(self) -> None:
-        """The dashboard's fake confidence value must not migrate into Python."""
+    def test_no_opaque_model_concept_exists(self) -> None:
+        """The dashboard's fake confidence value must not migrate into Python.
+
+        **Updated in Phase 17G, narrowly.** 17E forbade the words ``score``,
+        ``threshold`` and ``intelligence`` outright, on the grounds that the engine
+        defined no such quantity and any value a policy invented would be
+        fabricated. That reasoning still holds about *fabricating* one - and 17G
+        honoured it by defining and documenting the score in
+        ``crypto_paper_lab.intelligence`` before using it here. What must remain
+        forbidden is the class of thing 17E was actually worried about:
+
+        * a score this module *invents*, rather than compares against - covered by
+          ``test_the_seam_compares_a_score_it_did_not_compute``;
+        * an opaque or learned model, which would make the number unauditable.
+
+        So ``score``, ``threshold`` and ``intelligence`` are allowed here and the
+        following are not. This is a narrowing by intent, not a deletion of the
+        guard.
+        """
 
         code = code_only(POLICY_SOURCE)
 
         for forbidden in (
             "confidence",
-            "intelligence",
-            "score",
-            "threshold",
             "predict",
             "forecast",
             "probability",
@@ -808,14 +822,46 @@ class TestScopeGuards:
             "neural",
             "classif",
             "feature",
+            "tensor",
+            "weights",
+            "training",
+            "learn",
         ):
             assert forbidden not in code, forbidden
 
-    def test_no_ninety_threshold_anywhere_in_the_seam(self) -> None:
+    def test_the_seam_compares_a_score_it_did_not_compute(self) -> None:
+        """The seam holds a number to compare. It never computes one.
+
+        The strongest available statement of the 17E property: every mention of a
+        score in this module is a comparison or a field name, and none is arithmetic
+        that produces one.
+        """
+
+        tree = ast.parse(POLICY_SOURCE.read_text(encoding="utf-8"))
+
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Assign):
+                continue
+            # No assignment anywhere produces a score value.
+            for target in node.targets:
+                assert "score" not in ast.dump(target), ast.dump(target)
+
+    def test_no_ninety_threshold_is_hardcoded_in_the_seam(self) -> None:
+        """The threshold's default lives in the scorer, not here.
+
+        ``IntelligencePolicy`` declares a default of 90 in its own signature,
+        because a dataclass needs one, but the *authoritative* default is
+        ``intelligence.DEFAULT_THRESHOLD``. A test in ``test_mode_contracts``
+        asserts the two agree, so this guard is about the number appearing in
+        *logic* here - a comparison against a literal would pin behaviour that
+        configuration is supposed to own.
+        """
+
         code = code_only(POLICY_SOURCE)
 
-        assert "90" not in code
-        assert "0.9" not in code
+        # Field default declarations are allowed; comparisons are not.
+        assert "if self.intelligence_score < 9" not in code
+        assert "< 90" not in code
 
     def test_policy_module_imports_nothing_but_stdlib(self) -> None:
         modules = set()

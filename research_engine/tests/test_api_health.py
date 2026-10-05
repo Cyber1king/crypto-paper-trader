@@ -173,8 +173,9 @@ def test_only_the_permitted_routes_exist(client: TestClient) -> None:
     Phase 16A allowed only ``/healthz``; 16B added ``/api/session``; 16C added
     ``/api/market``; 16D added ``/api/signal``; 16E added ``/api/account``,
     ``/api/position`` and ``/api/trades``; 16F added ``/api/statistics``.
-    Phase 17D added the five ``/api/replay`` control routes. Any further route
-    must be a conscious decision with its own tests, not a by-product.
+    Phase 17D added the five ``/api/replay`` control routes; 17F added
+    ``/api/modes``; 17G added ``/api/ai``. Any further route must be a conscious
+    decision with its own tests, not a by-product.
     """
 
     paths = {
@@ -193,6 +194,8 @@ def test_only_the_permitted_routes_exist(client: TestClient) -> None:
         "/api/trades",
         "/api/statistics",
         "/api/replay",
+        "/api/modes",
+        "/api/ai",
         "/api/replay/start",
         "/api/replay/pause",
         "/api/replay/step",
@@ -212,7 +215,13 @@ def test_only_the_permitted_routes_exist(client: TestClient) -> None:
         "/api/high-risk",
         "/api/equity",
         "/api/position/close",
+        "/api/position/close-all",
+        "/api/orders",
+        "/api/alerts",
         "/api/replay/seek",
+        "/api/modes/ai_intelligence",
+        "/api/ai/step",
+        "/api/ai/reset",
     ],
 )
 def test_deferred_routes_do_not_exist(client: TestClient, path: str) -> None:
@@ -229,6 +238,21 @@ def test_deferred_routes_do_not_exist(client: TestClient, path: str) -> None:
     manual close. ``/api/replay/seek`` stays absent because rewinding is
     ``reset`` plus ``step(count)``, and adding a seek would be a second way to do
     one thing.
+
+    Phase 17G adds five more absences, each for a stated reason:
+
+    * ``/api/orders``, ``/api/orders/close``-style paths and ``/api/alerts`` -
+      there is no order concept and no notification delivery in this system.
+      Alerts has no broker at all (Phase 17A §12.1), so there is nothing for a
+      notification to have caused.
+    * ``/api/position/close-all`` - declined with Q1.
+    * ``/api/modes/ai_intelligence`` - mode *contracts* are discovered through
+      ``GET /api/modes``; a per-mode configuration endpoint would be a second
+      source for configuration that ``ModeSpec`` already reports.
+    * ``/api/ai/step`` and ``/api/ai/reset`` - AI progression uses the same
+      ``/api/replay/step`` and ``/api/replay/reset`` routes every other mode uses,
+      with ``?mode=ai_intelligence``. Separate verbs would be a second way to do
+      one thing.
     """
 
     assert client.get(path).status_code == 404
@@ -297,6 +321,18 @@ ALLOWED_ENGINE_IMPORTS = {
                      # source; Phase 16F recomputes none of it
     "replay",       # Replay - the ONLY replay engine; Phase 17D adds no
                      # lifecycle, step or accounting logic of its own
+    "modes",        # Mode identities and the mode -> policy mapping; holds
+                     # configuration only, never trading state
+    "execution",    # IntelligencePolicy - the Phase 17E seam. Phase 17G's
+                     # registry names it explicitly when building the AI session's
+                     # replay, because that replay must refuse every entry so the
+                     # book stays AI's single owner
+    "intelligence", # IntelligenceScore - the deterministic 0-100 qualification
+                     # score. Phase 17G reads it to report; it never recomputes it
+    "ai_paper",     # AiPaperBook - the SOLE owner of AI capital and position
+                     # state. Phase 17G added it because AI permits several
+                     # concurrent positions and PaperBroker holds exactly one;
+                     # Standard's broker and baseline are untouched
 }
 
 

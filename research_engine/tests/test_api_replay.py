@@ -67,6 +67,9 @@ INITIAL_FIELDS = {
     "start_index", "bars_processed", "current_timestamp", "next_timestamp",
     "next_candle_available", "starting_balance", "balance", "realized_pnl",
     "trade_count", "has_open_position", "open_position", "last_signal",
+    # Phase 17F: echoes which mode was selected. The only field added to this
+    # response since 17D, and it is configuration rather than trading state.
+    "mode",
 }
 
 #: Fields the engine cannot authoritatively produce. If any appears, the

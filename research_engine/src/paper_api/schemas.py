@@ -504,6 +504,55 @@ class StatisticsResponse(_Strict):
 
 
 # ---------------------------------------------------------------------------
+# modes (Phase 17F)
+# ---------------------------------------------------------------------------
+
+
+class ModeInfoModel(_Strict):
+    """Configuration of one paper mode. Identity only, never trading state.
+
+    Deliberately carries no balance, cursor, journal, position or P&L. A mode is
+    a name, a policy and a capability; anything that changes as it runs belongs to
+    its broker and is read from ``/api/replay?mode=...``.
+    """
+
+    mode: str = Field(description="Stable mode identifier used in requests.")
+    label: str = Field(description="Human-facing name. Cosmetic; never a lookup key.")
+    supports_execution: bool = Field(
+        description="Whether this mode may execute paper trades at all. False for "
+                    "Alerts, which holds no broker, so execution is not merely "
+                    "switched off but unrepresentable."
+    )
+    available: bool = Field(
+        description="Whether the mode can be used yet. A reserved mode is "
+                    "recognised and refused rather than silently treated as "
+                    "Standard."
+    )
+    note: str = Field(
+        description="Why the mode is unavailable, or what it will become. Surfaced "
+                    "so a client can explain itself instead of guessing."
+    )
+    policy: dict | None = Field(
+        default=None,
+        description="Identity of the policy this mode decides with, or null for a "
+                    "mode with no policy because it cannot execute."
+    )
+
+
+class ModesResponse(_Strict):
+    """Every recognised mode. Read-only discovery; holds no session state."""
+
+    default_mode: str = Field(
+        description="Mode selected when a request omits one."
+    )
+    modes: list[ModeInfoModel] = Field(
+        description="All modes, available or reserved. Reserved entries are "
+                    "included so a client can tell 'not built yet' from 'no such "
+                    "mode'."
+    )
+
+
+# ---------------------------------------------------------------------------
 # replay (Phase 17D)
 # ---------------------------------------------------------------------------
 
@@ -522,6 +571,252 @@ class ReplayDatasetModel(_Strict):
     last_timestamp: datetime
     candle_count: int
     interval_seconds: int
+
+
+class ScoreComponentModel(_Strict):
+    """One explained contribution to an intelligence score.
+
+    Mirrors ``crypto_paper_lab.intelligence.ScoreComponent``. ``points`` is what the
+    component contributed and ``weight`` is the most it could have, so a client can
+    show *why* a score is what it is without reimplementing the scorer.
+    """
+
+    name: str
+    points: float
+    weight: float
+    reason: str = Field(
+        description="Plain-language explanation built from the same numbers as "
+                    "points, so the score can be audited by hand."
+    )
+
+
+class IntelligenceModel(_Strict):
+    """A deterministic intelligence score and its qualification verdict.
+
+    Mirrors ``crypto_paper_lab.intelligence.IntelligenceScore``.
+
+    This is a **research heuristic**, not a probability, a win rate, an expected
+    return or any profit forecast. ``qualified`` means only that the score reached
+    the configured threshold.
+    """
+
+    score: int = Field(
+        ge=0,
+        le=100,
+        description="Score on the fixed 0-100 scale. Not a probability.",
+    )
+    threshold: float = Field(
+        description="Threshold this score was compared against."
+    )
+    qualified: bool = Field(
+        description="score >= threshold. True does not imply a profitable trade."
+    )
+    side: Literal["long", "short", "flat"]
+    components: list[ScoreComponentModel] = Field(
+        description="Every component with its own explanation. Sums to the score."
+    )
+
+
+class AiPositionModel(_Strict):
+    """One AI paper position, open or closed.
+
+    Mirrors ``crypto_paper_lab.ai_paper.AiPosition``.
+
+    ``position_id`` is a monotonic counter (``ai-1``, ``ai-2``, ...), not a UUID, so
+    a run is reproducible and the journal reads in order. ``allocated_capital`` is
+    the paper cash this position holds, which is released on close.
+
+    Exit fields are null while the position is open: ``PaperBroker`` computes cost
+    and exit price only at close, and reporting zeros would claim an open trade
+    cost nothing.
+    """
+
+    position_id: str
+    side: Literal["long", "short"]
+    state: Literal["open", "closed"]
+    entry_index: int
+    entry_timestamp: datetime
+    entry_price: float
+    quantity: float
+    allocated_capital: float
+    reason: str
+    intelligence_score: int = Field(
+        description="Score that admitted this signal, retained so a closed "
+                    "position can be audited without re-deriving it."
+    )
+    qualification_threshold: float
+
+    exit_index: int | None = None
+    exit_timestamp: datetime | None = None
+    exit_price: float | None = None
+    exit_reason: str | None = None
+    bars_held: int | None = None
+    realized_pnl: float | None = Field(
+        default=None,
+        description="The engine's net_pnl: gross P&L minus costs. Null while open.",
+    )
+    costs: float | None = None
+
+    @classmethod
+    def from_position(cls, position) -> "AiPositionModel":
+        from .marketdata import as_utc
+
+        return cls(
+            position_id=position.position_id,
+            side=position.side,
+            state=position.state,
+            entry_index=position.entry_index,
+            entry_timestamp=as_utc(position.entry_timestamp),
+            entry_price=position.entry_price,
+            quantity=position.quantity,
+            allocated_capital=position.allocated_capital,
+            reason=position.reason,
+            intelligence_score=position.intelligence_score,
+            qualification_threshold=position.qualification_threshold,
+            exit_index=position.exit_index,
+            exit_timestamp=(
+                as_utc(position.exit_timestamp)
+                if position.exit_timestamp is not None
+                else None
+            ),
+            exit_price=position.exit_price,
+            exit_reason=position.exit_reason,
+            bars_held=position.bars_held,
+            realized_pnl=position.realized_pnl,
+            costs=position.costs,
+        )
+
+
+class AiAccountModel(_Strict):
+    """AI Intelligence's capital accounting. Mirrors ``AiAccountState``.
+
+    Absent by design, because the engine has no live price feed and cannot
+    authoritatively produce them: ``equity``, ``mark_price``, ``unrealized_pnl``,
+    ``margin``, ``buying_power`` and ``leverage``. There is no leverage and no
+    margin in this mode; ``available_capital`` is capital bookkeeping, not
+    buying power.
+    """
+
+    starting_capital: float
+    committed_capital: float = Field(
+        description="Allocated capital held by open positions. Released on close."
+    )
+    realized_balance: float
+    available_capital: float = Field(
+        description="realized_balance minus committed_capital. What a new position "
+                    "could still commit."
+    )
+    realized_pnl: float = Field(
+        description="realized_balance minus starting_capital."
+    )
+    open_position_count: int = Field(ge=0)
+    max_positions: int = Field(ge=1)
+    position_allocation: float = Field(
+        description="Capital per position: starting_capital divided by "
+                    "max_positions."
+    )
+    signals_qualified: int = Field(
+        ge=0,
+        description="Signals that reached the threshold, whether or not they found "
+                    "room. Counted because a mode that silently drops signals is "
+                    "indistinguishable from one that saw none."
+    )
+    signals_admitted: int = Field(ge=0)
+    signals_declined: int = Field(ge=0)
+
+    @classmethod
+    def from_state(cls, state) -> "AiAccountModel":
+        return cls(**vars(state))
+
+
+class AiStateResponse(_Strict):
+    """AI Intelligence's authoritative mode state.
+
+    Two sources, kept clearly separate because they answer different questions:
+
+    * ``account`` and ``positions`` are the AI contract - capital, positions and
+      realised P&L, all read from ``AiPaperBook``.
+    * ``replay`` is the shared Phase 17D replay state: cursor, lifecycle status,
+      dataset and strategy identity. Present because a client needs to know where
+      the mode is in the dataset, and identical in shape to every other mode's.
+
+    Everything here is a projection. This module computes no score, no quantity,
+    no exit and no P&L.
+    """
+
+    mode: str = Field(
+        default="ai_intelligence",
+        description="Always 'ai_intelligence'. This response describes no other "
+                    "mode; the AI contract exists for this one mode only.",
+    )
+    account: AiAccountModel
+    positions: list[AiPositionModel] = Field(
+        description="Every position in entry order, open or closed."
+    )
+    journal: list[AiPositionModel] = Field(
+        description="Closed positions in close order."
+    )
+    last_score: IntelligenceModel | None = Field(
+        default=None,
+        description="The most recent signal's score, or null before the first "
+                    "step. Null is honest rather than zero: no signal has been "
+                    "observed yet."
+    )
+    replay: ReplayStateResponse = Field(
+        description="The shared replay state: cursor, status, identities. Carries "
+                    "'mode' = 'ai_intelligence' because that is genuinely which "
+                    "mode produced it."
+    )
+
+    @classmethod
+    def from_ai(cls, session, score=None) -> "AiStateResponse":
+        """Build from an :class:`~paper_api.moderegistry.AiSession`.
+
+        ``score`` is the session's authoritative last score. It is passed in rather
+        than recomputed here, because a transport that re-ran the scorer would be a
+        second scoring implementation.
+        """
+
+        from .marketdata import as_utc
+
+        resolved_score = (
+            score if score is not None else session.book.last_score
+        )
+
+        return cls(
+            mode="ai_intelligence",
+            account=AiAccountModel.from_state(session.ai_state),
+            positions=[
+                AiPositionModel.from_position(position)
+                for position in session.book.positions
+            ],
+            journal=[
+                AiPositionModel.from_position(position)
+                for position in session.book.journal
+            ],
+            last_score=(
+                IntelligenceModel(
+                    score=resolved_score.score,
+                    threshold=resolved_score.threshold,
+                    qualified=resolved_score.qualified,
+                    side=resolved_score.side,
+                    components=[
+                        ScoreComponentModel(
+                            name=component.name,
+                            points=component.points,
+                            weight=component.weight,
+                            reason=component.reason,
+                        )
+                        for component in resolved_score.components
+                    ],
+                )
+                if resolved_score is not None
+                else None
+            ),
+            replay=ReplayStateResponse.from_state(
+                session.snapshot(), mode="ai_intelligence"
+            ),
+        )
 
 
 class ReplaySignalModel(_Strict):
@@ -632,13 +927,21 @@ class ReplayStateResponse(_Strict):
                     "step. Not an order and not a fill.",
     )
 
+    #: Which mode produced this state.
+    mode: str = Field(
+        default="standard",
+        description="Paper mode this state belongs to. Omitting the parameter "
+                    "selects Standard, so a request that never mentions modes "
+                    "behaves exactly as it did before they existed.",
+    )
+
     @classmethod
-    def from_state(cls, state) -> "ReplayStateResponse":
+    def from_state(cls, state, mode: str = "standard") -> "ReplayStateResponse":
         """Build a response from an engine ``ReplayState``.
 
-        Timestamps are converted to aware UTC by the caller's helper so the
-        wire format matches every other Phase 16 endpoint. The engine keeps naive
-        UTC and is not modified.
+        ``mode`` is echoed from the request rather than derived, because a replay
+        has no opinion about which mode asked for it - the registry does, and the
+        transport passes the selection through.
         """
 
         from .marketdata import as_utc
@@ -646,6 +949,7 @@ class ReplayStateResponse(_Strict):
         signal = state.last_signal
 
         return cls(
+            mode=mode,
             replay_id=state.replay_id,
             status=state.status,
             dataset=ReplayDatasetModel(
