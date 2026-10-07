@@ -584,6 +584,12 @@ class AiPaperBook:
         (``backtest.py:207-213``, ``replay.py:1098``): the last known price is the
         final bar's close, not its open. Returns the closed positions in close
         order.
+
+        Each closed position also lands in :attr:`journal`, so a caller that wants the
+        record must read this return value *or* the journal before anything clears
+        them. :meth:`reset` calls this and then clears the journal in the same
+        operation, so after a reset the return value is the only surviving account of
+        what was closed.
         """
 
         closed: list[AiPosition] = []
@@ -605,12 +611,29 @@ class AiPaperBook:
     def reset(self) -> AiAccountState:
         """Restore the initial allocation with nothing open.
 
-        Unlike ``Replay.reset()``, this cannot silently discard an open position:
-        every one of them is closed at the final candle's close, recorded with an
-        explicit exit reason and its realised P&L. Discarding them would leave
-        capital committed against positions that no longer exist, and force-closing
-        without recording would lose the audit trail. Both are worse than finishing
-        the trade honestly.
+        Two distinct acts, and the second is what makes the first worth doing:
+
+        1. **Every open position is closed first**, at the final candle's close via
+           :meth:`close_open_positions`, through the same broker and cost model any
+           other exit uses. This releases the capital each position was holding.
+           Skipping it would leave ``committed_capital`` outstanding against
+           positions that no longer exist.
+        2. **The runtime state is then cleared**, by :meth:`_reset_runtime`.
+
+        The close in step 1 is a real, priced close - it computes an exit price, an
+        exit reason (``AI_EXIT_END_OF_DATA``) and net realised P&L through
+        :meth:`_close` - and all of that lands in :attr:`journal`. **Step 2 then
+        discards it**, because it clears ``_closed`` along with everything else.
+
+        So the record of a reset-time close exists for exactly as long as it takes to
+        clear the journal, and is not observable afterwards. That is deliberate and
+        not a bug: reset is a rewind, and a rewound book has no history. The close is
+        performed because *capital accounting* requires it, not because the trade is
+        being reported.
+
+        Callers that need to know what a reset closed must read
+        :meth:`close_open_positions`'s return value, or capture ``self.state`` before
+        calling ``reset``. Nothing is promised to survive this call.
 
         The dataset is not reloaded and is immutably held, so reset cannot mutate
         it.

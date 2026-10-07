@@ -123,11 +123,28 @@ export function MarketChart({
 
   return (
     <Card className="flex-1 min-h-[440px] flex flex-col overflow-hidden">
-      <CardHeader className="py-4 border-b flex flex-row items-center justify-between gap-3 bg-muted/20">
-        <div className="flex items-center gap-4 min-w-0">
-          <CardTitle className="text-lg flex items-center gap-2 shrink-0">
-            <Activity className="w-5 h-5 text-primary" aria-hidden="true" />
-            {asset ?? "—"} Price History
+      {/*
+       * `flex-wrap` on the header row.
+
+       * This row carries two groups that must not shrink: the asset title, the last
+       * close, the timeframe, and the dataset badge. Together they are roughly 570px,
+       * which no narrow viewport can hold. Rather than clip any of them or drop one
+       * below a legible size, the groups wrap onto a second line once they no longer
+       * fit. At desktop widths there is ample room, so this changes nothing there —
+       * it only engages when the alternative was overflow.
+
+       * The title wraps rather than truncating. An earlier pass used `truncate` here
+       * and it did remove the overflow, but at 390px it clipped the panel's own name to
+       * "BTC/USDT Price His…" — trading a layout defect for a content one, which is not
+       * a fix. `break-words` plus a wrapping basis lets the title occupy two lines and
+       * stay fully readable. `basis-full` at the narrowest breakpoint puts the price
+       * badge on its own line, so the title has the full card width to itself.
+       */}
+      <CardHeader className="py-4 border-b flex flex-row flex-wrap items-center justify-between gap-3 bg-muted/20">
+        <div className="flex items-center gap-4 min-w-0 basis-full sm:basis-auto">
+          <CardTitle className="text-lg flex items-center gap-2 min-w-0">
+            <Activity className="w-5 h-5 text-primary shrink-0" aria-hidden="true" />
+            <span className="break-words">{asset ?? "—"} Price History</span>
           </CardTitle>
           {lastClose !== null ? (
             <Badge variant="outline" className="font-mono text-sm shrink-0">

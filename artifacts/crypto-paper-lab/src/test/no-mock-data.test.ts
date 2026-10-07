@@ -131,13 +131,32 @@ describe("no synthetic or randomised trading values on the dashboard path", () =
     });
   }
 
-  it("the only setInterval is the running-state poll, not a chart heartbeat", () => {
+  it("every setInterval drives the replay, none drives a chart heartbeat", () => {
     const hooks = code("lib/hooks.ts");
     const count = (hooks.match(/setInterval/g) ?? []).length;
 
-    // Exactly one: the deterministic poll while `status === "running"`. The old
-    // engine had a three-second heartbeat that re-jittered the last candle.
-    expect(count).toBe(1);
+    // Exactly two, both in `lib/hooks.ts`, both named:
+    //
+    // 1. The deterministic poll while `status === "running"`.
+    // 2. The Phase 20 auto-step, which advances one bar per tick while running
+    //    because the engine runs no background worker by design.
+    //
+    // The old synthetic engine had a three-second heartbeat that re-jittered the
+    // last candle, which is the thing this guard exists to keep out. An enumerated
+    // count rather than "no timers at all", because these two are the replay's own
+    // cadence and are load-bearing: dropping either reintroduces the Phase 19
+    // finding of a running replay whose cursor never moves.
+    expect(count).toBe(2);
+
+    // Both must be gated on `status !== "running"`, so neither can outlive the
+    // replay's own lifecycle. A timer that kept ticking while idle would keep the
+    // engine busy against a dashboard the user had stopped.
+    //
+    // Matched as a bare comparison because {@link codeOnly} removes string literals
+    // entirely, quotes included, so the scanned source keeps the operator but not
+    // the value beside it. The count above already proves there are only these two
+    // timers, so what this adds is that both are lifecycle-gated.
+    expect(hooks).toMatch(/status\s*!==/);
 
     for (const relative of LIVE_FILES) {
       if (relative === "lib/hooks.ts") {

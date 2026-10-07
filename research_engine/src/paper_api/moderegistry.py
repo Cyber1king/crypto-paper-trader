@@ -199,14 +199,19 @@ class AiSession(ReplaySession):
             return replay.state
 
     def reset(self) -> ReplayState:
-        """Rewind AI. Closes open positions honestly, then clears the book.
+        """Rewind AI. Closes open positions, then clears the book.
 
         ``Replay.reset()`` would refuse while its own position is open - and its
         position is never open, because the AI policy refuses every entry, so that
         refusal cannot fire here. The book has no such refusal: it closes what it
-        holds at the final candle's close, records the reason and the realised P&L,
-        and only then clears. Discarding them would leave capital committed against
-        positions that no longer exist.
+        holds at the final candle's close and only then clears, so capital is never
+        left committed against a position that has ceased to exist.
+
+        The close is priced and does record an exit reason and realised P&L, but
+        ``AiPaperBook.reset`` clears the journal in the same call, so that record is
+        not observable afterwards. Reset is a rewind, not a reporting event; see
+        ``AiPaperBook.reset`` for the full statement of what does and does not
+        survive.
         """
 
         with self._lock:

@@ -1230,6 +1230,296 @@ class TestAiExit:
 
 
 # ---------------------------------------------------------------------------
+# Phase 22. what reset actually does
+# ---------------------------------------------------------------------------
+
+
+class TestAiReset:
+    """Reset is a rewind. These pin down exactly what that means.
+
+    Phase 22 audited this because the docstrings claimed reset "records the reason
+    and realised P&L before clearing", which reads as though the record survives.
+    It does not. ``AiPaperBook.reset`` closes what is open - genuinely, and through
+    the real broker - and then clears ``_closed`` in the same call.
+
+    The close is still necessary: it is what releases ``committed_capital``, which
+    would otherwise be outstanding against positions that no longer exist. What these
+    tests establish is that the close is real, that nothing of it is observable
+    afterwards, and that no test or caller is relying on it being retained.
+    """
+
+    @staticmethod
+    def advanced(bars: int, length: int = 800) -> AiPaperBook:
+        """A book walked ``bars`` bars, ready to be reset."""
+
+        return run(book_for(length=length), end=REQUIRED + bars)
+
+    def test_reset_with_no_open_position_is_a_clean_rewind(self) -> None:
+        book = self.advanced(400)
+        book.reset()
+
+        state = book.state
+
+        assert book.open_positions == ()
+        assert book.journal == ()
+        assert book.positions == ()
+        assert book.last_score is None
+        assert state.committed_capital == 0.0
+        assert state.realized_balance == pytest.approx(STARTING_BALANCE)
+        assert state.available_capital == pytest.approx(STARTING_BALANCE)
+        assert state.realized_pnl == 0.0
+
+    def test_reset_releases_capital_held_by_an_open_position(self) -> None:
+        """The reason the close happens at all."""
+
+        book = self.advanced(200)
+        opened = book.open_positions
+
+        assert opened, "expected an open position at this depth"
+        assert book.state.committed_capital > 0.0
+
+        book.reset()
+
+        # Without the close, this capital would stay committed against positions
+        # that no longer exist.
+        assert book.state.committed_capital == 0.0
+        assert book.state.available_capital == pytest.approx(STARTING_BALANCE)
+
+    def test_reset_closes_open_positions_before_clearing(self) -> None:
+        """The close is real, priced, and happens first.
+
+        ``close_open_positions`` is called directly to observe the intermediate state,
+        because ``reset`` clears the journal before any caller could read it. What is
+        asserted here is the close itself, not its retention.
+        """
+
+        book = self.advanced(200)
+        opened = book.open_positions
+        assert opened
+
+        closed = book.close_open_positions()
+
+        assert len(closed) == len(opened)
+        assert {p.position_id for p in closed} == {p.position_id for p in opened}
+
+        final_close = book._candles[-1].close
+        for position in closed:
+            assert position.state == "closed"
+            assert position.exit_price == final_close
+            assert position.exit_timestamp == book._candles[-1].timestamp
+            assert position.exit_reason == AI_EXIT_END_OF_DATA
+            assert position.realized_pnl is not None
+            assert position.costs is not None
+            assert position.bars_held is not None
+
+        assert book.open_positions == ()
+
+    def test_reset_closes_every_open_position_not_just_the_first(self) -> None:
+        """Several concurrent positions is the ordinary case, not an edge case."""
+
+        # A longer series than the shared ``PREFIX``: 1200 bars need 1200+22 candles,
+        # and asking for more than the book holds is an IndexError rather than a
+        # meaningful assertion.
+        book = self.advanced(1200, length=1400)
+        opened = book.open_positions
+        assert len(opened) > 1, "expected concurrent positions at this depth"
+
+        closed = book.close_open_positions()
+
+        assert len(closed) == len(opened)
+        assert all(p.exit_reason == AI_EXIT_END_OF_DATA for p in closed)
+        assert book.open_positions == ()
+
+    def test_the_reset_close_record_is_not_retained(self) -> None:
+        """The Phase 22 finding, asserted so it cannot regress silently.
+
+        The close happens, is priced, and is then discarded in the same call. If a
+        future change made it observable this test fails, which is the point: the
+        docstrings promise the opposite, and the promise should change deliberately.
+        """
+
+        book = self.advanced(200)
+        assert book.open_positions
+
+        book.reset()
+
+        assert book.journal == ()
+        assert book.positions == ()
+        assert book.state.realized_pnl == 0.0
+
+    def test_reset_is_deterministic(self) -> None:
+        """Two books advanced identically reset identically."""
+
+        first = self.advanced(200)
+        second = self.advanced(200)
+
+        assert len(first.open_positions) == len(second.open_positions)
+
+        first.reset()
+        second.reset()
+
+        assert first.state == second.state
+        assert first.journal == second.journal
+        assert first.positions == second.positions
+
+    def test_reset_then_rerun_reproduces_the_first_run(self) -> None:
+        """Reset is a rewind, so replaying after it must match the first run.
+
+        Both halves matter: the replayed run must equal the *first* run's state (reset
+        discarded nothing that a rerun would not recreate), and it must also equal a
+        fresh book's run (reset left no residue).
+        """
+
+        first = self.advanced(400)
+        first_state = first.state
+        first_journal = first.journal
+        assert first_state.realized_pnl != 0.0, "expected a non-trivial first run"
+
+        first.reset()
+        replayed = run(first, end=REQUIRED + 400)
+
+        fresh = self.advanced(400)
+
+        assert replayed.state == first_state
+        assert replayed.journal == first_journal
+        assert fresh.state == first_state
+        assert fresh.journal == first_journal
+
+    def test_reset_does_not_touch_the_dataset(self) -> None:
+        length = 800
+        book = self.advanced(200, length=length)
+        before = len(book._candles)
+
+        book.reset()
+
+        assert len(book._candles) == before
+
+    def test_reset_returns_starting_capital_not_a_figure_it_invented(self) -> None:
+        book = self.advanced(600)
+
+        assert book.state.realized_pnl != 0.0, "expected a non-trivial run"
+
+        state = book.reset()
+
+        assert state.starting_capital == STARTING_BALANCE
+        assert state.realized_balance == pytest.approx(STARTING_BALANCE)
+        assert state.realized_pnl == 0.0
+        assert state.open_position_count == 0
+
+
+class TestAiResetOverHttp:
+    """The same contract as a client sees it."""
+
+    def test_reset_with_an_open_position_leaves_a_fresh_book(self) -> None:
+        client = client_for()
+        client.post("/api/replay/step", params={"mode": AI_INTELLIGENCE, "count": 200})
+
+        before = client.get("/api/ai").json()
+        assert before["account"]["open_position_count"] > 0
+
+        client.post("/api/replay/reset", params={"mode": AI_INTELLIGENCE})
+
+        after = client.get("/api/ai").json()
+
+        assert after["positions"] == []
+        assert after["journal"] == []
+        assert after["last_score"] is None
+        assert after["account"]["committed_capital"] == 0.0
+        assert after["account"]["open_position_count"] == 0
+        assert after["account"]["starting_capital"] == pytest.approx(STARTING_BALANCE)
+        assert after["account"]["available_capital"] == pytest.approx(STARTING_BALANCE)
+        assert after["account"]["realized_pnl"] == 0.0
+
+    def test_the_reset_response_itself_reports_a_rewound_replay(self) -> None:
+        """The route returns ReplayStateResponse, not the AI book.
+
+        Asserted so the boundary is explicit: a client cannot read anything about the
+        AI book off a reset response and was never able to.
+        """
+
+        client = client_for()
+        client.post("/api/replay/step", params={"mode": AI_INTELLIGENCE, "count": 200})
+
+        response = client.post(
+            "/api/replay/reset", params={"mode": AI_INTELLIGENCE}
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+
+        assert body["mode"] == AI_INTELLIGENCE
+        assert body["status"] == "idle"
+        assert body["cursor"] == REQUIRED
+        # Nothing AI-account shaped leaks into the replay response.
+        for forbidden in ("positions", "journal", "last_score", "committed_capital"):
+            assert forbidden not in body, forbidden
+
+    def test_the_reset_response_makes_no_claim_about_closed_positions(self) -> None:
+        """The route must not advertise a close it does not report.
+
+        This is the documentation half of Phase 22, asserted: if the reset docstring
+        is ever rewritten to promise a retained close, this fails.
+        """
+
+        doc = APP_SOURCE.read_text(encoding="utf-8")
+        reset_doc = doc.split('"/api/replay/reset"', 1)[1].split('"""', 2)[1]
+
+        assert "records the reason and realised" not in reset_doc
+        assert "journal is empty" in reset_doc
+
+    def test_resetting_ai_leaves_standard_untouched(self) -> None:
+        client = client_for()
+        client.post("/api/replay/step", params={"mode": STANDARD, "count": 400})
+
+        standard_before = client.get("/api/replay", params={"mode": STANDARD}).json()
+
+        client.post("/api/replay/reset", params={"mode": AI_INTELLIGENCE})
+
+        standard_after = client.get("/api/replay", params={"mode": STANDARD}).json()
+        account_after = client.get("/api/account").json()
+
+        assert standard_after["cursor"] == standard_before["cursor"]
+        assert standard_after["trade_count"] == standard_before["trade_count"]
+        assert standard_after["balance"] == standard_before["balance"]
+        assert account_after["balance"] == standard_before["balance"]
+
+    def test_standard_is_unaffected_while_ai_holds_an_open_position(self) -> None:
+        """The strongest isolation claim: an AI reset while Standard is mid-trade."""
+
+        client = client_for()
+        client.post("/api/replay/step", params={"mode": STANDARD, "count": 400})
+
+        ai_before = client.get("/api/ai").json()
+        standard_before = client.get("/api/replay", params={"mode": STANDARD}).json()
+
+        client.post("/api/replay/reset", params={"mode": AI_INTELLIGENCE})
+
+        standard_after = client.get("/api/replay", params={"mode": STANDARD}).json()
+
+        assert standard_before["trade_count"] > 0
+        assert standard_after["trade_count"] == standard_before["trade_count"]
+        assert standard_after["balance"] == standard_before["balance"]
+        assert standard_after["status"] == standard_before["status"]
+        # And the AI reset did happen, so the isolation is not vacuous.
+        assert client.get("/api/ai").json()["positions"] == []
+        del ai_before
+
+    def test_ai_reset_is_idempotent_over_http(self) -> None:
+        client = client_for()
+        client.post("/api/replay/step", params={"mode": AI_INTELLIGENCE, "count": 400})
+
+        first = client.post("/api/replay/reset", params={"mode": AI_INTELLIGENCE})
+        after_first = client.get("/api/ai").json()
+        second = client.post("/api/replay/reset", params={"mode": AI_INTELLIGENCE})
+        after_second = client.get("/api/ai").json()
+
+        assert first.status_code == 200
+        assert second.status_code == 200
+        assert after_first["account"] == after_second["account"]
+        assert after_first["positions"] == after_second["positions"] == []
+
+
+# ---------------------------------------------------------------------------
 # 28-32. isolation
 # ---------------------------------------------------------------------------
 

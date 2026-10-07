@@ -192,8 +192,29 @@ export function StatRow({
           </span>
         ) : null}
       </span>
+      {/*
+       * The value side carries three constraints, and each is load-bearing.
+
+       * `min-w-0` is the one that matters. A flex item defaults to
+       * `min-width: auto`, which resolves to its content's min-content width, so this
+       * box refuses to shrink below the widest unbreakable token inside it. For a
+       * 64-character SHA-256 in a monospace face that token is the whole string:
+       * roughly 548px, unbreakable because hex has no spaces. The row is 406px, so
+       * the item overflowed it and the excess propagated up through every ancestor
+       * to the document. `min-w-0` lets the item shrink to the row and no further.
+
+       * `break-all` then makes the shrunk box usable. Without it the hash still would
+       * not wrap, because `word-break: normal` only breaks at opportunities this
+       * string does not have. It is applied to the value rather than the row so it is
+       * scoped to the token that needs it: short values are unaffected, and a wrapped
+       * hash stays readable rather than being truncated or clipped.
+
+       * `min-w-0` on the row itself keeps the flex container from being widened by
+       * its own content in the first place, which is what stops the cascade rather
+       * than merely containing its last link.
+       */}
       <span
-        className={`${mono ? "font-mono" : "font-sans"} font-semibold text-sm text-right ${toneClass}`}
+        className={`min-w-0 break-all ${mono ? "font-mono" : "font-sans"} font-semibold text-sm text-right ${toneClass}`}
       >
         {value}
       </span>
@@ -219,7 +240,15 @@ export function Panel({
 }) {
   return (
     <Card className={className}>
-      <CardHeader className="py-3 border-b bg-muted/20 flex flex-row items-center justify-between gap-3">
+      {/*
+       * `flex-wrap` on the panel header, for the same reason as the chart header: a
+       * long title and a status badge cannot always share one line, and on the
+       * narrowest viewport "Intelligence Score" was being ellipsised to "Intelligenc…"
+       * to make room for "Below threshold". Neither is expendable — one is the panel's
+       * name, the other is the engine's verdict — so the badge drops to a second line
+       * instead. Wider than that, nothing wraps and the header is unchanged.
+       */}
+      <CardHeader className="py-3 border-b bg-muted/20 flex flex-row flex-wrap items-center justify-between gap-3">
         <div className="min-w-0">
           <CardTitle className="text-sm font-bold uppercase tracking-wide flex items-center gap-2">
             {icon}

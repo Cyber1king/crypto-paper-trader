@@ -27,7 +27,7 @@
  * whose broker is permanently flat by design.
  */
 
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   useMutation,
@@ -404,6 +404,155 @@ export function useRunningPolling(status: ReplayStatus | undefined): void {
 
     return () => clearInterval(timer);
   }, [status, queryClient]);
+}
+
+// ---------------------------------------------------------------------------
+// Client-driven advancement (Phase 20)
+// ---------------------------------------------------------------------------
+
+/**
+ * One bar per tick, on the same cadence as the running poll above.
+ *
+ * Deliberately the same constant: the replay's visible rate of change and the rate
+ * at which the UI re-reads it should agree, or the dashboard appears to skip bars
+ * between refreshes. A faster step would advance the engine faster than the panel
+ * that reports it could keep up, which reads as the UI losing figures rather than
+ * the replay running quickly.
+ */
+export const AUTO_STEP_INTERVAL_MS = RUNNING_POLL_INTERVAL_MS;
+
+/** Batches per tick. One, so each tick is one bar and the cadence is legible. */
+export const AUTO_STEP_BARS = 1;
+
+export interface AutoStepOptions {
+  /** The mode whose replay is being driven. `undefined` disables the effect. */
+  readonly mode: ModeInfo | undefined;
+  /** The server's status. Stepping happens only while this is `running`. */
+  readonly status: ReplayStatus | undefined;
+  /** Extra query keys to refresh after each successful tick. */
+  readonly alsoRefresh?: readonly (readonly unknown[])[];
+}
+
+/**
+ * Advance the replay one bar per tick while the server reports `running`.
+ *
+ * ## Why the client drives this
+ *
+ * `POST /api/replay/start` sets the lifecycle flag and returns. The engine runs no
+ * background worker and no timer - `replaysession.py` states this is deliberate, so
+ * Phase 17D's prohibition on threads is not violated by omission. The consequence
+ * is that `running` on its own moves nothing: the cursor stays put until something
+ * calls `/api/replay/step`. This hook is that something.
+ *
+ * The alternative - a `setInterval` per bar in the engine - was rejected because it
+ * would put a thread in a package whose design explicitly excludes one, and would
+ * make replay results depend on wall-clock timing rather than on the number of bars
+ * requested. Driving from the client keeps the engine a pure function of
+ * `bars_processed`, so the same total bar count produces the same journal whether it
+ * arrived as one batch, several, or one at a time.
+ *
+ * ## Why the guard conditions are what they are
+ *
+ * `inFlight` is a ref rather than state on purpose. State would re-render on every
+ * tick, and the interval's own teardown reads as a duplicate timer; a ref mutates
+ * without scheduling a render, so the interval is created exactly once per running
+ * period. It also outlives the mutation: `step.isPending` is false in the same tick
+ * a request resolves, which is the window in which a second request would overlap
+ * the first and let two bars advance in one interval.
+ *
+ * `REPLAY_FINISHED` stops the loop rather than being retried. The engine reached the
+ * end of the dataset; every subsequent step is a guaranteed `409`, so continuing
+ * would spin a timer that can only fail. `POSITION_OPEN` does *not* stop the loop,
+ * because the engine steps past an open position as part of its normal operation and
+ * refusing to continue would strand the replay.
+ */
+export function useAutoStep({
+  mode,
+  status,
+  alsoRefresh,
+}: AutoStepOptions): void {
+  const api = usePaperApi();
+  const queryClient = useQueryClient();
+
+  const modeId = mode?.mode;
+  const enabled = Boolean(mode?.available && mode.supports_execution);
+
+  const inFlight = useRef(false);
+  const halted = useRef(false);
+
+  /**
+   * `alsoRefresh` through a ref, and this is load-bearing rather than tidiness.
+   *
+   * The dashboard builds that array inline, so a new identity arrives on every
+   * render. Listed as an effect dependency it would tear down and rebuild the
+   * interval on each one, restarting the countdown every time any unrelated state
+   * changed — the loop would then fire at unpredictable times, and in the worst
+   * case never, if renders came faster than the tick. A ref keeps the latest value
+   * readable by the interval without making it a reason to re-run the effect.
+   */
+  const refreshKeys = useRef(alsoRefresh);
+  refreshKeys.current = alsoRefresh;
+
+  useEffect(() => {
+    if (!enabled || status !== "running" || !modeId) {
+      return;
+    }
+
+    /**
+     * One bar, then adopt the engine's own response.
+     *
+     * `setQueryData` rather than `invalidateQueries`, for the same reason the manual
+     * controls do it: the response is authoritative, so a refetch would be a second
+     * request for state the server just handed over.
+     */
+    const advance = async () => {
+      const state = await api.stepReplay(modeId, AUTO_STEP_BARS);
+
+      queryClient.setQueryData(queryKeys.replay(modeId), state);
+
+      await Promise.all(
+        (refreshKeys.current ?? []).map((key) =>
+          queryClient.invalidateQueries({ queryKey: key }),
+        ),
+      );
+    };
+
+    const timer = setInterval(() => {
+      // A request already in flight owns this tick. Without this a slow response
+      // would let two intervals' worth of work overlap, and two bars would advance
+      // in one interval.
+      if (inFlight.current || halted.current) {
+        return;
+      }
+
+      inFlight.current = true;
+
+      void advance()
+        .catch((error: unknown) => {
+          // A refusal carries no new state, so `status` is still `running` in the
+          // cache and the effect's dependency has not changed. Left alone, the
+          // timer would keep firing into a guaranteed `409`. `REPLAY_FINISHED` is
+          // therefore terminal for the loop: the dataset is exhausted and no later
+          // step can succeed. `POSITION_OPEN` deliberately does not halt, because
+          // the engine steps through an open position as normal operation and
+          // halting would strand the replay.
+          if (isApiError(error) && error.code === "REPLAY_FINISHED") {
+            halted.current = true;
+          }
+        })
+        .finally(() => {
+          inFlight.current = false;
+        });
+    }, AUTO_STEP_INTERVAL_MS);
+
+    return () => {
+      clearInterval(timer);
+      inFlight.current = false;
+      // Reset per running period, not per tick, so a fresh Start clears a halt left
+      // by the previous one.
+      halted.current = false;
+    };
+  }, [api, enabled, modeId, queryClient, status]);
 }
 
 // ---------------------------------------------------------------------------

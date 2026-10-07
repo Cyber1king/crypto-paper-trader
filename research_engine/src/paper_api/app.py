@@ -694,11 +694,17 @@ def create_app(
         work around that refusal.
 
         Phase 17G: ``mode=ai_intelligence`` resets the AI book too. It closes open
-        positions at the final candle's close and records the reason and realised
-        P&L before clearing, rather than discarding them - committed capital must
-        never outlive the position that was holding it. The AI replay's own broker
-        is never open, so ``Replay.reset()``'s ``POSITION_OPEN`` refusal cannot fire
-        for this mode.
+        positions at the final candle's close before clearing, because committed
+        capital must never outlive the position that was holding it. The AI replay's
+        own broker is never open, so ``Replay.reset()``'s ``POSITION_OPEN`` refusal
+        cannot fire for this mode.
+
+        That close is priced and records an exit reason and realised P&L internally,
+        but the same call clears the AI journal, so **nothing about it appears in this
+        response**. The response below is the standard ``ReplayStateResponse`` for the
+        mode's shared replay; the AI account, positions and journal are read from
+        ``GET /api/ai``, and after a reset that journal is empty. A reset is a
+        rewind, not a reporting event.
         """
 
         name, view = _session_of(mode)

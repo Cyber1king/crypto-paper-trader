@@ -67,6 +67,7 @@ import {
   queryKeys,
   queryError,
   useAiState,
+  useAutoStep,
   useHealth,
   useMarket,
   useModes,
@@ -120,7 +121,20 @@ export function Dashboard() {
   const market = useMarket(chartQuery);
 
   // Poll only while a replay is armed, so an idle dashboard makes no requests.
-  useRunningPolling(replay.data?.status ?? ai.data?.replay.status);
+  const replayStatus = replay.data?.status ?? ai.data?.replay.status;
+
+  useRunningPolling(replayStatus);
+
+  // Advance the engine while it reports `running`. The server sets the flag on Start
+  // and runs no worker, so without this the replay would hold its cursor and the UI
+  // would look frozen while claiming to be running (Phase 20).
+  useAutoStep({
+    mode: isControllable ? mode : undefined,
+    status: replayStatus,
+    alsoRefresh: isAi
+      ? [queryKeys.ai()]
+      : [queryKeys.account(), queryKeys.trades(), queryKeys.statistics()],
+  });
 
   const controls = useReplayControls(isControllable ? mode : undefined, {
     // The replay response is authoritative for the replay itself, but it does not
@@ -168,47 +182,73 @@ export function Dashboard() {
   const aiError = queryError(ai);
   const marketError = queryError(market);
 
+  // `shrink-0` on every badge: each is `whitespace-nowrap inline-flex`, so as a flex
+  // item it would otherwise be a candidate for shrinking and its label would clip.
+  // "API online" is the liveness signal and must stay legible at every width.
   const healthBadge = health.isLoading ? (
-    <Badge variant="outline" className="font-mono text-[10px] uppercase tracking-widest">
+    <Badge
+      variant="outline"
+      className="shrink-0 font-mono text-[10px] uppercase tracking-widest"
+    >
       Checking…
     </Badge>
   ) : health.isError ? (
     <Badge
       variant="outline"
       data-testid="health-offline"
-      className="font-mono text-[10px] uppercase tracking-widest border-destructive/40 text-destructive"
+      className="shrink-0 font-mono text-[10px] uppercase tracking-widest border-destructive/40 text-destructive"
     >
-      <WifiOff className="w-3 h-3 mr-1" aria-hidden="true" />
+      <WifiOff className="w-3 h-3 mr-1 shrink-0" aria-hidden="true" />
       API offline
     </Badge>
   ) : (
     <Badge
       variant="outline"
       data-testid="health-online"
-      className="font-mono text-[10px] uppercase tracking-widest border-success/40 text-success bg-success/10"
+      className="shrink-0 font-mono text-[10px] uppercase tracking-widest border-success/40 text-success bg-success/10"
     >
-      <Wifi className="w-3 h-3 mr-1" aria-hidden="true" />
+      <Wifi className="w-3 h-3 mr-1 shrink-0" aria-hidden="true" />
       API online
     </Badge>
   );
 
   return (
     <div className="min-h-screen bg-background flex flex-col font-sans">
-      <header className="border-b bg-card sticky top-0 z-10 px-6 py-4 flex items-center justify-between gap-4 shadow-sm">
-        <div className="flex items-center gap-3">
-          <div className="bg-primary/10 p-2 rounded-md border border-primary/20">
+      {/*
+       * `flex-wrap` on the header row.
+
+       * On a 390px viewport the title group and the badge/balance group cannot both
+       * fit side by side: the right group alone needs 231px of content and the row has
+       * 342px after padding, so `min-w-0` alone was not enough — the groups shrank but
+       * their contents escaped, and that escape is what produced the residual 45px of
+       * document scroll. Wrapping moves the second group to its own line, which is the
+       * only arrangement that shows all of it without clipping. Desktop is unaffected:
+       * there is room, so nothing wraps and the layout is unchanged.
+       */}
+      <header className="border-b bg-card sticky top-0 z-10 px-6 py-4 flex flex-wrap items-center justify-between gap-4 shadow-sm">
+        <div className="flex items-center gap-3 min-w-0">
+          <div className="bg-primary/10 p-2 rounded-md border border-primary/20 shrink-0">
             <Beaker className="w-5 h-5 text-primary" aria-hidden="true" />
           </div>
-          <div>
+          <div className="min-w-0">
             <h1 className="font-bold text-lg tracking-tight">Crypto Paper Lab</h1>
             <p className="text-xs text-muted-foreground font-mono flex items-center gap-1 uppercase tracking-wider mt-0.5">
-              <ShieldAlert className="w-3 h-3" aria-hidden="true" />
-              Simulated Environment
+              <ShieldAlert className="w-3 h-3 shrink-0" aria-hidden="true" />
+              <span className="truncate">Simulated Environment</span>
             </p>
           </div>
         </div>
 
-        <div className="flex items-center gap-4">
+        {/*
+         * `min-w-0` and `shrink` on the right-hand group.
+         *
+         * As a flex item this defaulted to `min-width: auto`, so on a 390px viewport
+         * the health badge and the balance together refused to shrink below their
+         * content and pushed 6px past the header's own right edge. Allowing the group
+         * to shrink lets the balance's own `min-w-0` (below) do its job, and the badge
+         * keeps its size because it has `shrink-0`.
+         */}
+        <div className="flex items-center gap-4 min-w-0 shrink">
           {healthBadge}
           {StandardHeaderBalance(mode, replay.data, account.data)}
         </div>
@@ -340,8 +380,8 @@ function StandardHeaderBalance(
 ) {
   if (mode?.mode !== "standard") {
     return (
-      <div className="text-right" data-testid="header-no-balance">
-        <div className="text-xs text-muted-foreground font-mono uppercase tracking-wider">
+      <div className="text-right min-w-0" data-testid="header-no-balance">
+        <div className="text-xs text-muted-foreground font-mono uppercase tracking-wider break-words">
           Paper Balance
         </div>
         <div className="font-mono text-xl font-bold tracking-tight text-muted-foreground">
@@ -357,8 +397,8 @@ function StandardHeaderBalance(
   const balance = replay?.balance ?? account?.balance;
 
   return (
-    <div className="text-right">
-      <div className="text-xs text-muted-foreground font-mono uppercase tracking-wider">
+    <div className="text-right min-w-0">
+      <div className="text-xs text-muted-foreground font-mono uppercase tracking-wider break-words">
         Paper Balance
       </div>
       <div
