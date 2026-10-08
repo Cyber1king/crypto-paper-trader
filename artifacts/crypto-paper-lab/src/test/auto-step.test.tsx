@@ -545,17 +545,40 @@ describe("Phase 20: mode safety", () => {
     expect(stepCalls(stub!.urls()).length).toBe(afterSwitch);
   });
 
-  it("a reserved mode issues no step request", async () => {
-    const { stub } = renderDashboard(routes(() => running()));
-    await settle();
+it("High-Risk auto-steps its own mode while running", async () => {
+      // The inverse of the reserved-mode assertion this test used to make.
+      // `high_risk` was the last reserved mode and became executable in Phase 26B,
+      // so the property worth protecting now is that it drives *its own* replay and
+      // nobody else's - the same claim the manual and daily-target blocks make.
+      const { stub } = renderDashboard(routes(() => running()));
+      await settle();
 
-    await act(async () => {
-      screen.getByTestId("mode-high_risk").click();
-      await Promise.resolve();
+      await act(async () => {
+        screen.getByTestId("mode-high_risk").click();
+        await Promise.resolve();
+      });
+      await settle();
+      await tick(3);
+
+      const calls = stepCalls(stub!.urls());
+      expect(calls.length).toBeGreaterThan(0);
+      expect(calls.every((u) => u.includes("mode=high_risk"))).toBe(true);
     });
-    await settle();
-    await tick(4);
 
-    expect(stepCalls(stub!.urls())).toHaveLength(0);
+    it("a mode whose replay is not running issues no step request", async () => {
+      // The reservation case is gone, so the invariant it used to guard is asserted
+      // directly: auto-step follows the engine's `running` flag, not the mode being
+      // selectable. An idle replay must never be advanced on a timer.
+      const { stub } = renderDashboard(routes(() => REPLAY_IDLE));
+      await settle();
+
+      await act(async () => {
+        screen.getByTestId("mode-high_risk").click();
+        await Promise.resolve();
+      });
+      await settle();
+      await tick(4);
+
+      expect(stepCalls(stub!.urls())).toHaveLength(0);
+    });
   });
-});

@@ -26,6 +26,13 @@ import {
   DAILY_TARGET_MEASURED,
   DAILY_TARGET_NOTE,
   DAILY_WAITING_NOTE,
+  HIGH_RISK_CAUTION,
+  HIGH_RISK_FINISHED,
+  HIGH_RISK_FLAT,
+  HIGH_RISK_HOLDING_LONG,
+  HIGH_RISK_HOLDING_SHORT,
+  HIGH_RISK_INHERITS_NOTE,
+  HIGH_RISK_NOTE,
   MANUAL_FLAT,
   MANUAL_PENDING,
   MANUAL_PREVIEW_NOTE,
@@ -263,29 +270,128 @@ describe("dashboard: Alerts is brokerless in practice", () => {
   });
 });
 
-describe("dashboard: reserved modes issue no execution request", () => {
-  // `daily_target` was removed in Phase 24B and `manual` in Phase 25B, as each
-  // became executable. Both are now covered by their own describe blocks below, which
-  // assert the opposite: selecting one *does* issue its own mode's requests.
-  for (const mode of ["high_risk"]) {
-    it(`selecting ${mode} shows the server's note and requests no replay`, async () => {
-      const { stub } = renderDashboard();
+describe("dashboard: High-Risk", () => {
+  // High-Risk owns its own broker, and the Phase 16/17G projections have no `mode`
+  // parameter - they describe Standard. So the dashboard must request High-Risk's own
+  // route and none of the Standard ones while High-Risk is selected.
+  //
+  // This block replaces "reserved modes issue no execution request", which asserted
+  // the opposite for `high_risk`. Phase 26B made it the last reserved mode executable,
+  // so that describe had nothing left to iterate over: every mode Phase 17A named now
+  // has a contract.
+  const highRiskRoutes: StubRoute[] = [
+    ...happyRoutes(),
+    { match: "/api/high-risk/config", body: HIGH_RISK_FLAT },
+    { match: "/api/high-risk", body: HIGH_RISK_FLAT },
+  ];
 
-      await selectMode(mode);
-      await screen.findByText("Unavailable");
-
-      const requests = stub.urls().filter((u) => u.includes(`mode=${mode}`));
-      expect(requests).toHaveLength(0);
-    });
-  }
-
-  it("shows the API's note rather than a client-authored message", async () => {
-    renderDashboard();
+  it("reads its replay and its own route", async () => {
+    const { stub } = renderDashboard(highRiskRoutes);
 
     await selectMode("high_risk");
-    await screen.findByText("Unavailable");
+    await screen.findByTestId("high-risk-panels");
 
-    expect(document.body.textContent).toContain(modeNamed("high_risk").note);
+    const urls = stub.urls();
+
+    expect(urls.some((u) => u.includes("mode=high_risk"))).toBe(true);
+    expect(urls.some((u) => u.includes("/api/high-risk"))).toBe(true);
+  });
+
+  it("does not request Standard's projections", async () => {
+    const { stub } = renderDashboard(highRiskRoutes);
+
+    await waitForUsableControls();
+    const seenBefore = stub.urls().length;
+
+    await selectMode("high_risk");
+    await screen.findByTestId("high-risk-panels");
+
+    const after = stub.urls().slice(seenBefore);
+
+    expect(after.some((u) => u.includes("/api/account"))).toBe(false);
+    expect(after.some((u) => u.includes("/api/statistics"))).toBe(false);
+  });
+
+  it("issues no request to another mode's own route", async () => {
+    const { stub } = renderDashboard(highRiskRoutes);
+
+    await waitForUsableControls();
+    const seenBefore = stub.urls().length;
+
+    await selectMode("high_risk");
+    await screen.findByTestId("high-risk-panels");
+
+    const after = stub.urls().slice(seenBefore);
+
+    // The isolation property in the browser: no Manual, AI or Daily Target route is
+    // touched while High-Risk is selected.
+    for (const other of ["/api/manual", "/api/ai", "/api/daily-target"]) {
+      expect(after.some((u) => u.includes(other))).toBe(false);
+    }
+  });
+
+  it("offers no separate high-risk lifecycle route", async () => {
+    const { stub } = renderDashboard(highRiskRoutes);
+
+    await selectMode("high_risk");
+    await screen.findByTestId("high-risk-panels");
+
+    const urls = stub.urls();
+
+    // Stepping and resetting go through the shared replay routes with the mode
+    // parameter. A mode-specific verb would be a second way to advance one replay.
+    for (const forbidden of [
+      "/api/high-risk/step",
+      "/api/high-risk/start",
+      "/api/high-risk/pause",
+      "/api/high-risk/reset",
+    ]) {
+      expect(urls.some((u) => u.includes(forbidden))).toBe(false);
+    }
+  });
+
+  it("shows the engine's scope statement, verbatim", async () => {
+    renderDashboard(highRiskRoutes);
+
+    await selectMode("high_risk");
+    await screen.findByTestId("high-risk-inherits-note");
+
+    expect(screen.getByTestId("high-risk-inherits-note").textContent).toBe(
+      HIGH_RISK_INHERITS_NOTE,
+    );
+  });
+
+  it("shows the engine's note rather than a client-authored message", async () => {
+    renderDashboard(highRiskRoutes);
+
+    await selectMode("high_risk");
+    await screen.findByTestId("high-risk-panels");
+
+    expect(document.body.textContent).toContain(HIGH_RISK_NOTE);
+  });
+
+  it("offers no trade button, only the size setting", async () => {
+    renderDashboard(highRiskRoutes);
+
+    await selectMode("high_risk");
+    await screen.findByTestId("high-risk-panels");
+
+    // High-Risk is automatic and adds no qualification rule, so it has no user-facing
+    // entry or exit affordance to offer.
+    expect(screen.queryByTestId("manual-buy")).toBeNull();
+    expect(screen.queryByTestId("manual-exit")).toBeNull();
+    expect(screen.getByTestId("high-risk-apply")).toBeTruthy();
+  });
+
+  it("shows the risk fraction the engine reported", async () => {
+    renderDashboard(highRiskRoutes);
+
+    await selectMode("high_risk");
+    await screen.findByTestId("high-risk-fraction");
+
+    expect(screen.getByTestId("high-risk-fraction").textContent).toContain(
+      "25.00%",
+    );
   });
 });
 

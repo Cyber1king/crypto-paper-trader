@@ -143,11 +143,22 @@ class TestRegistration:
 
     def test_manual_is_no_longer_reserved(self) -> None:
         assert MANUAL not in reserved_modes()
-        assert reserved_modes() == ("high_risk",)
 
-    def test_high_risk_remains_reserved(self) -> None:
-        assert mode_spec("high_risk").available is False
-        assert mode_spec("high_risk").policy.identity()["max_positions"] == 0
+    def test_nothing_is_reserved_after_manual(self) -> None:
+        # Phase 25B left `high_risk` as the only reservation, so Manual's own test
+        # pinned it there. Phase 26B made it executable and it was the last one, so the
+        # assertion is now that nothing at all is reserved.
+        #
+        # Kept as a live assertion rather than deleted: if a future phase reserves a
+        # mode, this fails and names it, instead of the reservation appearing silently.
+        assert reserved_modes() == ()
+
+    def test_high_risk_is_executable_but_untouched_by_manual(self) -> None:
+        # High-Risk is now a real mode with its own contract and its own tests in
+        # test_high_risk.py. Manual's suite asserts only that it is executable and that
+        # it did not become Manual's policy - a claim about isolation, not ownership.
+        assert mode_spec("high_risk").available is True
+        assert mode_spec("high_risk").policy.identity()["name"] != "manual"
 
     def test_the_policy_permits_one_position_and_trades_nothing(self) -> None:
         identity = mode_spec(MANUAL).policy.identity()

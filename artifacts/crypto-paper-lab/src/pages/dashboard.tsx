@@ -57,6 +57,7 @@ import {
 } from "@/components/ai-panels";
 import { AlertsPanel } from "@/components/alerts-panel";
 import { DailyTargetPanel } from "@/components/daily-target-panels";
+import { HighRiskPanel } from "@/components/high-risk-panels";
 import { ManualPanel } from "@/components/manual-panels";
 
 import {
@@ -75,6 +76,8 @@ import {
   useAutoStep,
   useDailyTargetConfig,
   useDailyTargetState,
+  useHighRiskConfig,
+  useHighRiskState,
   useManualActions,
   useManualState,
   useHealth,
@@ -108,6 +111,7 @@ export function Dashboard() {
   const isAlerts = mode?.mode === "alerts";
   const isDailyTarget = mode?.mode === "daily_target";
   const isManual = mode?.mode === "manual";
+  const isHighRisk = mode?.mode === "high_risk";
 
   // Alerts and reserved modes issue no replay request at all.
   const replay = useReplayState(isControllable ? mode : undefined);
@@ -127,7 +131,14 @@ export function Dashboard() {
   const manual = useManualState(isManual);
   const manualActions = useManualActions();
 
+  // High-Risk's paper state and its one configuration mutation, created unconditionally
+  // so the hook order stays stable across mode switches; neither fires unless
+  // High-Risk is selected.
+  const highRisk = useHighRiskState(isHighRisk);
+  const highRiskConfig = useHighRiskConfig();
+
   const manualError = queryError(manual);
+  const highRiskError = queryError(highRisk);
 
   const account = useStandardAccount(mode?.mode === "standard");
   const trades = useTrades(mode?.mode === "standard");
@@ -176,8 +187,10 @@ export function Dashboard() {
           ? [queryKeys.dailyTarget()]
           : isManual
             ? [queryKeys.manual()]
-            : [queryKeys.account(), queryKeys.trades(), queryKeys.statistics()],
-    [isAi, isDailyTarget, isManual],
+            : isHighRisk
+              ? [queryKeys.highRisk()]
+              : [queryKeys.account(), queryKeys.trades(), queryKeys.statistics()],
+    [isAi, isDailyTarget, isManual, isHighRisk],
   );
 
   // Advance the engine while it reports `running`. The server sets the flag on Start
@@ -386,6 +399,28 @@ export function Dashboard() {
             refusal={refusal}
             controlsEnabled={Boolean(mode?.available && mode.supports_execution)}
             modeLabel={mode?.label ?? "Daily Target"}
+            status={replay.data?.status}
+            busy={controls.busy}
+            stepCount={stepCount}
+            onStepCountChange={setStepCount}
+            onStart={() => controls.start.mutate(undefined)}
+            onPause={() => controls.pause.mutate()}
+            onStep={handleStep}
+            onReset={handleReset}
+          />
+        ) : isHighRisk ? (
+          <HighRiskBody
+            highRisk={highRisk.data}
+            isLoading={highRisk.isLoading}
+            error={highRiskError}
+            onSetFraction={(riskFraction) =>
+              highRiskConfig.setFraction.mutate(riskFraction)
+            }
+            isSubmitting={highRiskConfig.setFraction.isPending}
+            actionError={highRiskConfig.setFraction.error ?? null}
+            refusal={refusal}
+            controlsEnabled={Boolean(mode?.available && mode.supports_execution)}
+            modeLabel={mode?.label ?? HIGH_RISK_FALLBACK_LABEL}
             status={replay.data?.status}
             busy={controls.busy}
             stepCount={stepCount}
@@ -845,6 +880,98 @@ function ManualBody({
         onCancel={onCancel}
         isSubmitting={isSubmitting}
         isCancelling={isCancelling}
+        actionError={actionError}
+      />
+    </div>
+  );
+}
+
+/**
+ * Fallback label, used only in the instant before `GET /api/modes` resolves.
+ *
+ * Carries "Paper Trading" for the same reason every other mode's label does: the mode
+ * name must never reach the screen without the word that says what it is. A heading
+ * reading only "High-Risk" would be the easiest thing on the page to misread as a
+ * real leveraged position.
+ */
+const HIGH_RISK_FALLBACK_LABEL = "High-Risk — Paper Trading";
+
+/**
+ * High-Risk's body.
+ *
+ * ## The shared lifecycle controls
+ *
+ * START, PAUSE, STEP and RESET are the same controls every controllable mode uses,
+ * against `?mode=high_risk`. High-Risk deliberately adds no lifecycle of its own:
+ * there is no `/api/high-risk/step` route, because a second way to advance one
+ * replay is a second thing to keep correct.
+ *
+ * ## There is no trade button
+ *
+ * This is the only automatic mode besides Standard, and that is the point. High-Risk
+ * enters exactly the signals Standard enters — it adds no qualification rule — so it
+ * needs no user affordance to trade. The *only* control it adds is the size setting,
+ * and the engine refuses that while a position is open rather than reporting a size
+ * that no longer describes the position above it.
+ */
+function HighRiskBody({
+  highRisk,
+  isLoading,
+  error,
+  onSetFraction,
+  isSubmitting,
+  actionError,
+  refusal,
+  controlsEnabled,
+  modeLabel,
+  status,
+  busy,
+  stepCount,
+  onStepCountChange,
+  onStart,
+  onPause,
+  onStep,
+  onReset,
+}: {
+  highRisk: Parameters<typeof HighRiskPanel>[0]["highRisk"];
+  isLoading: boolean;
+  error: ApiError | null;
+  onSetFraction: (riskFraction: number) => void;
+  isSubmitting: boolean;
+  actionError: ApiError | null;
+} & ControlsProps) {
+  return (
+    <div className="flex flex-col gap-6">
+      <div className="border border-border rounded-lg px-4 py-3 bg-card">
+        <PaperControls
+          status={status}
+          modeLabel={modeLabel}
+          busy={busy}
+          disabled={!controlsEnabled}
+          onStart={onStart}
+          onPause={onPause}
+          onStep={onStep}
+          onReset={onReset}
+          refusal={refusal}
+          stepCount={stepCount}
+          onStepCountChange={onStepCountChange}
+        />
+        <p className="text-[11px] text-muted-foreground mt-3 border-l-2 border-primary/40 pl-3 leading-relaxed">
+          These controls drive the high-risk mode&apos;s replay through the shared
+          transport (<code className="font-mono">?mode=high_risk</code>). Balance,
+          exposure and P&amp;L come from{" "}
+          <code className="font-mono">GET /api/high-risk</code>, and the size setting
+          is sent to <code className="font-mono">POST /api/high-risk/config</code> —
+          nothing is computed here.
+        </p>
+      </div>
+
+      <HighRiskPanel
+        highRisk={highRisk}
+        isLoading={isLoading}
+        error={error}
+        onSetFraction={onSetFraction}
+        isSubmitting={isSubmitting}
         actionError={actionError}
       />
     </div>

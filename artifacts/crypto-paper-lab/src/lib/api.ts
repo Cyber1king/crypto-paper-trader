@@ -583,6 +583,67 @@ export interface ManualStateResponse {
   readonly replay: ReplayState;
 }
 
+/**
+ * High-Risk's authoritative paper state (Phase 26B).
+ *
+ * Standard's own strategy, entered on the same signals, with a larger share of
+ * paper cash committed to each position.
+ *
+ * `exposure` and `exposure_fraction` are engine-computed and displayed verbatim.
+ * This client never derives them, and never derives any money figure on this
+ * interface: every field below is read straight from the API.
+ *
+ * Nothing on this interface appears on `/api/account`, `/api/position`,
+ * `/api/trades`, `/api/statistics`, `/api/replay` or `/api/ai`, which keep
+ * describing Standard.
+ */
+export interface HighRiskStateResponse {
+  readonly mode: "high_risk";
+  /** Carries "Paper Trading", so the mode never appears without saying what it is. */
+  readonly label: string;
+  readonly available: boolean;
+  /**
+   * Share of current paper cash committed to each position, as a fraction.
+   * Applies to the next entry.
+   */
+  readonly risk_fraction: number;
+  /**
+   * The engine's hard ceiling. Exposure cannot exceed paper cash, so this is the
+   * largest position the mode can take.
+   */
+  readonly max_risk_fraction: number;
+  readonly paper_cash: number;
+  readonly starting_balance: number;
+  /** `cash - starting_balance`. Never includes an unrealised amount. */
+  readonly realized_pnl: number;
+  readonly trade_count: number;
+  readonly open_position: OpenPosition | null;
+  /**
+   * `entry_price * quantity` of the open trade, or 0 when flat.
+   * Never greater than `paper_cash`. Displayed as given; never recomputed here.
+   */
+  readonly exposure: number;
+  /** `exposure / paper_cash`, or 0 when flat. Displayed as given. */
+  readonly exposure_fraction: number;
+  /** Always 0 or 1. */
+  readonly position_count: number;
+  readonly max_positions: number;
+  /** Closed-trade tally by exit reason, straight from `Replay`. */
+  readonly exit_counts: Readonly<Record<string, number>>;
+  /** The strategy's latest observation. `flat` is normal, not an error. */
+  readonly last_signal: ReplaySignal | null;
+  /**
+   * The scope boundary, served so a client cannot drop it: High-Risk adds no
+   * qualification rule and inherits Standard's signal set.
+   */
+  readonly inherits_note: string;
+  /** What the mode is, and what "high risk" means here. */
+  readonly note: string;
+  /** The measured friction caution. */
+  readonly caution: string;
+  readonly replay: ReplayState;
+}
+
 /** Engine error codes the UI handles by name rather than by status alone. */
 export type ApiErrorCode =
   | "NETWORK_UNAVAILABLE"
@@ -894,6 +955,53 @@ export class PaperApi {
       { mode: "manual" },
       signal,
       {},
+    );
+  }
+
+  // -- High-Risk (Phase 26B) ----------------------------------------------
+
+  /**
+   * High-Risk's paper state, and its one configurable setting.
+   *
+   * High-Risk is read-only through this method: it exposes no way to open, close or
+   * size a position. Entries come from the shared `/api/replay/step` route exactly
+   * as every other automatic mode's do, with `?mode=high_risk`.
+   */
+  async getHighRisk(signal?: AbortSignal): Promise<HighRiskStateResponse> {
+    return this.request<HighRiskStateResponse>(
+      "GET",
+      "/api/high-risk",
+      { mode: "high_risk" },
+      signal,
+    );
+  }
+
+  /**
+   * Set the share of paper cash each future position commits.
+   *
+   * `riskFraction` is sent exactly as typed and is never clamped here. The engine
+   * refuses anything outside `(0, max_risk_fraction]` rather than substituting a
+   * value, because a silently trimmed size would commit a position the user did not
+   * ask for - the one outcome a user choosing a number cannot detect from the
+   * resulting figures.
+   *
+   * Refused with `409 POSITION_OPEN` while a position is open: that trade was sized
+   * by the previous fraction, so accepting the change would leave the reported
+   * configuration inconsistent with the position displayed above it.
+   *
+   * A successful change touches only the configuration. Cursor, cash, realised P&L,
+   * journal and position are all unchanged, and the value applies to the next entry.
+   */
+  async setHighRiskFraction(
+    riskFraction: number,
+    signal?: AbortSignal,
+  ): Promise<HighRiskStateResponse> {
+    return this.request<HighRiskStateResponse>(
+      "POST",
+      "/api/high-risk/config",
+      { mode: "high_risk" },
+      signal,
+      { risk_fraction: riskFraction },
     );
   }
 

@@ -107,11 +107,16 @@ describe("mode rendering", () => {
     expect(
       screen.getByTestId("mode-alerts").getAttribute("data-executable"),
     ).toBe("false");
-    // `high_risk` is the reserved example now that daily_target (24C) and manual
-    // (25B) are both executable.
+    // Phase 26B made high_risk the last reserved mode executable, so no mode is
+    // reserved now. The assertion is inverted deliberately: it fails loudly if a
+    // future phase reserves one, which is exactly when this selector's behaviour
+    // needs re-examining.
     expect(
       screen.getByTestId("mode-high_risk").getAttribute("data-available"),
-    ).toBe("false");
+    ).toBe("true");
+    expect(
+      document.querySelectorAll('[data-available="false"]').length,
+    ).toBe(0);
     expect(
       screen.getByTestId("mode-manual").getAttribute("data-available"),
     ).toBe("true");
@@ -132,15 +137,14 @@ describe("mode rendering", () => {
     const label = (mode: string) =>
       (screen.getByTestId(`mode-${mode}`).textContent ?? "").toLowerCase();
 
-    expect(label("high_risk")).toContain("reserved");
     expect(label("alerts")).toContain("observation only");
     expect(label("standard")).toContain("executable");
-    // Both Phase 24 and Phase 25 modes are executable and must be labelled as such
-    // rather than reserved.
-    expect(label("daily_target")).toContain("executable");
-    expect(label("daily_target")).not.toContain("reserved");
-    expect(label("manual")).toContain("executable");
-    expect(label("manual")).not.toContain("reserved");
+    // Phases 24, 25 and 26 modes are all executable now and must be labelled as
+    // such rather than reserved.
+    for (const mode of ["daily_target", "manual", "high_risk"]) {
+      expect(label(mode)).toContain("executable");
+      expect(label(mode)).not.toContain("reserved");
+    }
   });
 
   it("selects a reserved mode without executing anything", () => {

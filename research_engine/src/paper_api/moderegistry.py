@@ -22,6 +22,7 @@ Ownership per mode::
       │                                     AiPaperBook  -> PaperBroker (position N)
       ├── daily_target    -> DailyTargetSession -> Replay -> PaperBroker
       ├── manual          -> ManualSession   -> Replay   -> PaperBroker
+      ├── high_risk       -> HighRiskSession -> Replay   -> PaperBroker
       └── (alerts holds no session at all)
 
 Why AI needs a second object, and not a rewritten ``Replay``
@@ -58,16 +59,18 @@ from crypto_paper_lab.daily_target import (
     DailyTargetState,
     DailyTargetTracker,
 )
-from crypto_paper_lab.execution import IntelligencePolicy
+from crypto_paper_lab.execution import AUTOMATIC_POLICY, IntelligencePolicy
+from crypto_paper_lab.high_risk import HighRiskConfig
 from crypto_paper_lab.intelligence import IntelligenceConfig
 from crypto_paper_lab.manual_paper import MANUAL_POLICY, ManualConfig
 from crypto_paper_lab.modes import (
     AI_INTELLIGENCE,
     ALERTS,
     DAILY_TARGET,
-    DEFAULT_MAX_POSITIONS,
     DEFAULT_MODE,
+    DEFAULT_MAX_POSITIONS,
     DEFAULT_THRESHOLD,
+    HIGH_RISK,
     MANUAL,
     MODES,
     ModeNotAvailableError,
@@ -78,6 +81,7 @@ from crypto_paper_lab.modes import (
 from crypto_paper_lab.replay import Replay, ReplayState, STATE_FINISHED
 from crypto_paper_lab.walkforward import baseline_config, phase13_costs
 
+from .highrisksession import HighRiskSession
 from .manualsession import ManualSession
 from .marketdata import dataset_identity, load_research_candles
 from .replaysession import ReplaySession
@@ -87,6 +91,8 @@ __all__ = [
     "ALERTS",
     "AiSession",
     "DailyTargetSession",
+    "HIGH_RISK",
+    "HighRiskSession",
     "MANUAL",
     "ManualSession",
     "ModeRegistry",
@@ -614,6 +620,16 @@ class ModeRegistry:
 
         return mode_spec(mode).mode == DAILY_TARGET
 
+    def is_high_risk(self, mode: str) -> bool:
+        """Whether ``mode`` is served by :class:`HighRiskSession`.
+
+        As with :meth:`is_ai`, :meth:`is_daily_target` and :meth:`is_manual`: the
+        transport asks a question rather than testing for a name, and an unknown
+        mode still raises.
+        """
+
+        return mode_spec(mode).mode == HIGH_RISK
+
     def is_manual(self, mode: str) -> bool:
         """Whether ``mode`` is served by :class:`ManualSession`.
 
@@ -716,6 +732,28 @@ class ModeRegistry:
 
         return session
 
+    def high_risk_session(self) -> "HighRiskSession":
+        """High-Risk's session.
+
+        Raises unless it really is a :class:`HighRiskSession`, for the same reason
+        :meth:`ai_session`, :meth:`daily_target_session` and
+        :meth:`manual_session` do: an injected builder returning a plain session
+        would leave the transport with no ``high_risk_state`` and no way to set
+        the size, and the failure would surface as an ``AttributeError`` inside a
+        route handler - a programming error dressed up as a data problem.
+        """
+
+        session = self.session(HIGH_RISK)
+
+        if not isinstance(session, HighRiskSession):
+            raise TypeError(
+                f"mode {HIGH_RISK!r} requires a HighRiskSession so its risk "
+                f"fraction and paper state have one owner; got "
+                f"{type(session).__name__}"
+            )
+
+        return session
+
     def standard_session(self) -> ReplaySession:
         """The default mode's session. What the Phase 16/17D routes describe."""
 
@@ -786,6 +824,38 @@ class ModeRegistry:
                     daily_target=lambda: tracker.reached_for(
                         session.replay.broker.cash
                     ),
+                )
+            )
+
+            return session
+
+        if self.is_high_risk(mode):
+            # Phase 26B. High-Risk differs from Standard in exactly one argument:
+            # `risk_fraction`. Same candles, same baseline strategy config, same
+            # phase 13 costs, same AUTOMATIC_POLICY - so the signals, entries,
+            # opposite-signal close-and-reverse and one-position limit are
+            # Standard's, object for object.
+            #
+            # Its OWN Replay is built here, distinct from Standard's, which is what
+            # gives the mode a separate broker, journal, cursor, cash and
+            # replay_id. The candle series is the shared immutable `lru_cache`d
+            # tuple: shared *input*, never shared state.
+            session = HighRiskSession(config=HighRiskConfig())
+
+            session.attach_replay(
+                Replay(
+                    load_research_candles(),
+                    config=baseline_config(),
+                    costs=phase13_costs(),
+                    # Standard's own policy instance. High-Risk changes no
+                    # decision, so it decides with the same object - which also
+                    # makes "no HighRiskPolicy" structural rather than a claim.
+                    policy=AUTOMATIC_POLICY,
+                    # The sizing seam: the only argument that differs from
+                    # Standard's replay. Bounded by the broker's own <= 1.0 check,
+                    # so exposure cannot exceed cash.
+                    risk_fraction=session.risk_fraction,
+                    dataset_sha256=dataset_identity(),
                 )
             )
 

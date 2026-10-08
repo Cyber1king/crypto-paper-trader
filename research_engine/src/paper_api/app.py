@@ -50,6 +50,7 @@ from crypto_paper_lab.replay import (
 from crypto_paper_lab.modes import (
     DAILY_TARGET,
     DEFAULT_MODE,
+    HIGH_RISK,
     MANUAL,
     ModeError,
     ModeSpec,
@@ -69,6 +70,8 @@ from .schemas import (
     DailyTargetConfigRequest,
     DailyTargetResponse,
     ExecutionIdentityModel,
+    HighRiskConfigRequest,
+    HighRiskStateResponse,
     ManualActionRequest,
     ManualStateResponse,
     MarketMetadataModel,
@@ -821,6 +824,116 @@ def create_app(
         session.cancel()
 
         return ManualStateResponse.from_session(session)
+
+    def _high_risk_session(mode: str | None):
+        """Resolve High-Risk's session, refusing any other mode.
+
+        Repeated across both High-Risk routes on purpose, for the same reason the
+        Manual routes repeat theirs: it is four lines, and duplicating it means each
+        route's guard is visible where the route is read.
+        """
+
+        name = HIGH_RISK if mode is None else mode
+
+        if name != HIGH_RISK:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "INVALID_MODE",
+                    "message": (
+                        f"/api/high-risk serves {HIGH_RISK!r} only; requested {name!r}"
+                    ),
+                },
+            )
+
+        return mode_registry.high_risk_session()
+
+    @app.get("/api/high-risk", response_model=HighRiskStateResponse, tags=["high-risk"])
+    def high_risk_state(
+        mode: str | None = Query(
+            default=None,
+            description="Paper mode. Must be 'high_risk'; this route serves that "
+                        "mode only. Omitting it is equivalent to naming it, because "
+                        "this route is mode-specific.",
+        ),
+    ) -> HighRiskStateResponse:
+        """High-Risk's authoritative paper state. Read-only (Phase 26B).
+
+        A projection of :class:`~crypto_paper_lab.simulator.PaperBroker` and the
+        mode's configured ``risk_fraction``, and **nothing else**. No fill is
+        derived here, no exposure is computed here and no P&L is recomputed here.
+
+        ``exposure`` is ``entry_price * quantity`` of the open trade and
+        ``exposure_fraction`` is that over cash - an arithmetic identity of two
+        fields the broker already owns, computed in the session. The invariant
+        ``exposure <= paper_cash`` holds because
+        :meth:`PaperBroker.open_from_signal` refuses any ``risk_fraction`` above
+        ``1.0`` before it sizes anything, so leverage is unreachable rather than
+        merely forbidden.
+
+        There is deliberately **no** ``/api/high-risk/step``, ``/start``,
+        ``/pause`` or ``/reset``. Those are the shared lifecycle routes with
+        ``?mode=high_risk``, exactly as for every other executable mode, so there
+        is one definition of a lifecycle rather than five.
+
+        High-Risk state appears **only** here. ``/api/account``,
+        ``/api/position``, ``/api/trades`` and ``/api/statistics`` keep describing
+        Standard, and no field of this response leaks onto ``/api/ai``,
+        ``/api/manual``, ``/api/daily-target`` or ``ReplayStateResponse``.
+        """
+
+        return HighRiskStateResponse.from_session(_high_risk_session(mode))
+
+    @app.post(
+        "/api/high-risk/config", response_model=HighRiskStateResponse, tags=["high-risk"]
+    )
+    def high_risk_config(
+        payload: HighRiskConfigRequest,
+        mode: str | None = Query(
+            default=None,
+            description="Paper mode. Must be 'high_risk'; this route serves that "
+                        "mode only. Omitting it is equivalent to naming it, because "
+                        "this route is mode-specific.",
+        ),
+    ) -> HighRiskStateResponse:
+        """Set the share of paper cash each future position commits (Phase 26B).
+
+        ``{"risk_fraction": 0.25}`` is the entire configuration.
+
+        The accepted range is finite, ``> 0`` and ``<= 1.0``. The ceiling is the
+        **broker's own** - :meth:`PaperBroker.open_from_signal` refuses anything
+        larger - so the ceiling this route validates against is the engine's, not a
+        UI convenience. Out-of-range values are **rejected, never clamped**: a
+        silently trimmed size would commit a position the user did not ask for,
+        which is the one outcome they cannot detect from the resulting figures.
+
+        Refused while a position is open, with ``409 POSITION_OPEN``. The open
+        trade was sized by the *previous* fraction and nothing in the broker
+        records which fraction produced it, so accepting the change would leave the
+        reported configuration inconsistent with the position displayed above it.
+        This is the same contract ``/api/replay/reset`` already uses for the same
+        class of reason.
+
+        A successful change touches **only** the configuration. The cursor, cash,
+        realized P&L, journal, open position and replay identity are all exactly
+        as they were, and the new value applies to the **next** entry.
+
+        Refusals
+        --------
+        ``422 VALIDATION_ERROR``
+            An unusable ``risk_fraction``: not a number, a boolean, ``NaN``,
+            infinity, zero, negative, or above ``1.0``.
+        ``409 POSITION_OPEN``
+            A paper position is open.
+        ``422 INVALID_MODE``
+            ``?mode=`` named anything but ``high_risk``.
+        """
+
+        session = _high_risk_session(mode)
+
+        session.set_risk_fraction(payload.risk_fraction)
+
+        return HighRiskStateResponse.from_session(session)
 
     @app.get("/api/replay", response_model=ReplayStateResponse, tags=["replay"])
     def replay_state(

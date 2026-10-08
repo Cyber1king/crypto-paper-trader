@@ -40,6 +40,7 @@ from crypto_paper_lab.dataset import load_dataset
 from crypto_paper_lab.execution import (
     AUTOMATIC_POLICY,
     DecisionContext,
+    ExecutionPolicy,
     IntelligencePolicy,
 )
 from crypto_paper_lab.modes import (
@@ -86,23 +87,31 @@ COSTS = phase13_costs()
 REQUIRED = 22
 PREFIX = 400
 
-#: Phase 17A names four product modes. Two still have no contract: ``manual`` has
-#: none at all ("the operator decides" is not an automatic policy), and
-#: ``high_risk``'s qualification rules are open question Q6, which the architecture
-#: requires to be pre-registered as research before implementation.
+#: Phase 17A names four product modes, and **all four now hold contracts**.
 #:
-#: ``daily_target`` left this tuple in Phase 24B. Its contract was already fully
-#: specified in architecture section 10 and its open questions Q4 and Q5 were
-#: measurement and presentation calls rather than research, so it became an
-#: implemented mode. ``ALERTS`` likewise stopped being reserved in 17G.
-RESERVED_FROM_ARCHITECTURE = ("high_risk",)
+#: ``manual`` had none at all ("the operator decides" is not an automatic policy),
+#: and ``high_risk``'s *qualification rules* were open question Q6, which the
+#: architecture required to be pre-registered as research before implementation.
+#: Phase 26B settled Q6 without research by **adding no qualification rule at all**:
+#: High-Risk inherits Standard's signal set and differs only in how much paper cash
+#: each position commits. Q6 therefore gates a mode that admits signals Standard
+#: rejects, and High-Risk is not one.
+#:
+#: ``daily_target`` left this tuple in Phase 24B, ``manual`` in 25B and
+#: ``high_risk`` in 26B. ``ALERTS`` stopped being reserved in 17G.
+#:
+#: Empty, and asserted as such in
+#: :meth:`TestModeIdentities.test_every_architecture_mode_now_has_a_contract`.
+#: The reservation existed so a typo could not become a silent new mode, and there is
+#: no longer a name left to protect.
+RESERVED_FROM_ARCHITECTURE: tuple = ()
 
 #: Modes the architecture named and that are now implemented and executable.
 #:
-#: ``daily_target`` joined this in Phase 24B/24C; ``manual`` in Phase 25B. Both left the
-#: reserved list rather than being renamed, because a mode that gains a contract keeps
-#: the identity it was reserved under.
-IMPLEMENTED_FROM_ARCHITECTURE = ("daily_target", "manual")
+#: ``daily_target`` joined this in Phase 24B/24C; ``manual`` in Phase 25B;
+#: ``high_risk`` in Phase 26B. All left the reserved list rather than being renamed,
+#: because a mode that gains a contract keeps the identity it was reserved under.
+IMPLEMENTED_FROM_ARCHITECTURE = ("daily_target", "manual", "high_risk")
 
 
 def code_only(path: pathlib.Path) -> str:
@@ -294,19 +303,25 @@ class TestModeIdentities:
             assert mode in known_modes(), mode
             assert isinstance(MODES[mode], ModeSpec)
 
-    def test_the_modes_still_without_a_contract_are_reserved(self) -> None:
-        """``high_risk`` stays reserved until it has a contract.
+    def test_every_architecture_mode_now_has_a_contract(self) -> None:
+        """Nothing is reserved any more.
 
-        ``manual`` left this list in Phase 25B, the third time a reserved mode has
-        gained an implementation and moved to
-        :data:`IMPLEMENTED_FROM_ARCHITECTURE`. It keeps the identity it was reserved
-        under, so ``mode_spec("manual")`` still resolves - it is simply executable now.
+        ``daily_target`` left this list in 24B, ``manual`` in 25B and
+        ``high_risk`` in 26B, each gaining an implementation and moving to
+        :data:`IMPLEMENTED_FROM_ARCHITECTURE`. A mode keeps the identity it was
+        reserved under, so ``mode_spec("high_risk")`` still resolves - it is simply
+        executable now.
+
+        This is a milestone rather than bookkeeping: every name Phase 17A reserved
+        has landed, so there is no longer a name left for the reservation to protect.
         """
 
-        for mode in RESERVED_FROM_ARCHITECTURE:
-            assert mode in reserved_modes(), mode
-            with pytest.raises(ModeNotAvailableError):
-                mode_policy(mode)
+        assert RESERVED_FROM_ARCHITECTURE == ()
+        assert reserved_modes() == ()
+
+        for mode in IMPLEMENTED_FROM_ARCHITECTURE:
+            assert MODES[mode].available is True, mode
+            assert isinstance(mode_policy(mode), ExecutionPolicy), mode
 
     def test_reserving_the_names_prevents_a_typo_becoming_a_new_mode(self) -> None:
         """A near-miss is unknown, not a silent new mode and not Standard.
@@ -319,8 +334,11 @@ class TestModeIdentities:
             with pytest.raises(UnknownModeError):
                 mode_spec(near_miss)
 
-        # The exact reserved name is recognised rather than unknown, and is refused
-        # where a policy or session is required.
+        # No name is reserved today, so this branch is vacuous by design. It is kept
+        # rather than deleted: the moment a mode is reserved again, the loop below
+        # starts asserting the real property with no further edit.
+        assert RESERVED_FROM_ARCHITECTURE == ()
+
         for mode in RESERVED_FROM_ARCHITECTURE:
             assert mode_spec(mode).available is False, mode
             with pytest.raises(ModeNotAvailableError):

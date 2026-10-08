@@ -45,6 +45,7 @@ import {
   type DailyTargetResponse,
   type ApiError,
   type ManualAction,
+  type HighRiskStateResponse,
   type ManualStateResponse,
   type HealthResponse,
   type MarketQuery,
@@ -65,6 +66,7 @@ export const queryKeys = {
   replay: (mode: string | undefined) => ["replay", mode ?? "standard"] as const,
   ai: () => ["ai"] as const,
   dailyTarget: () => ["daily-target"] as const,
+  highRisk: () => ["high-risk"] as const,
   manual: () => ["manual"] as const,
   account: () => ["account"] as const,
   trades: () => ["trades"] as const,
@@ -263,6 +265,71 @@ export function useManualActions(): ManualActionControl {
   });
 
   return { submit, cancel, busy: submit.isPending || cancel.isPending };
+}
+
+/**
+ * High-Risk's authoritative paper state (Phase 26B).
+ *
+ * Separate from {@link useReplayState} for the same reason the other mode-specific
+ * hooks are: the high-risk contract is not part of `ReplayStateResponse`, and widening
+ * that response would make every mode carry fields that are false for all of them.
+ *
+ * `enabled` is supplied by the caller, matching {@link useAiState} and
+ * {@link useManualState}.
+ */
+export function useHighRiskState(
+  enabled: boolean,
+): UseQueryResult<HighRiskStateResponse, ApiError> {
+  const api = usePaperApi();
+
+  return useQuery({
+    queryKey: queryKeys.highRisk(),
+    queryFn: ({ signal }) => api.getHighRisk(signal),
+    enabled,
+    retry: false,
+  });
+}
+
+/** What {@link useHighRiskConfig} exposes. */
+export interface HighRiskConfigControl {
+  /**
+   * Set the share of paper cash each future position commits.
+   *
+   * Resolves to the server's own state. The value is sent exactly as typed and is
+   * never clamped in the client: the engine refuses an out-of-range fraction rather
+   * than substituting one, and a client-side clamp would hide a request the user did
+   * not mean.
+   *
+   * The response is written into the cache rather than followed by a refetch, because
+   * the server already answers with the authoritative projection.
+   */
+  readonly setFraction: UseMutationResult<
+    HighRiskStateResponse,
+    ApiError,
+    number
+  >;
+  readonly busy: boolean;
+}
+
+/**
+ * The mutation behind High-Risk's configuration control.
+ *
+ * A **setting**, not a step, and deliberately separate from
+ * {@link useReplayControls}: changing the size must never advance the cursor. In
+ * practice the engine refuses the change outright while a position is open.
+ */
+export function useHighRiskConfig(): HighRiskConfigControl {
+  const api = usePaperApi();
+  const queryClient = useQueryClient();
+
+  const setFraction = useMutation<HighRiskStateResponse, ApiError, number>({
+    mutationFn: (riskFraction: number) => api.setHighRiskFraction(riskFraction),
+    onSuccess: (state) => {
+      queryClient.setQueryData(queryKeys.highRisk(), state);
+    },
+  });
+
+  return { setFraction, busy: setFraction.isPending };
 }
 
 /** What {@link useDailyTargetConfig} exposes. */

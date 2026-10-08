@@ -18,6 +18,9 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from crypto_paper_lab.high_risk import MAX_RISK_FRACTION
+
+from .highrisksession import HIGH_RISK_LABEL
 from .session import AccountState, ExecutionIdentity, SessionView, StrategyIdentity
 
 
@@ -1568,4 +1571,271 @@ class ManualStateResponse(_Strict):
             max_size_pct=session.manual_config.max_size_pct,
             preview_note=PREVIEW_NOTE,
             replay=ReplayStateResponse.from_state(state.replay, mode="manual"),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Phase 26B. High-Risk
+# ---------------------------------------------------------------------------
+
+
+class HighRiskConfigRequest(_Strict):
+    """The body of ``POST /api/high-risk/config``.
+
+    Exactly one field, and it is the whole mode.
+
+    ``risk_fraction`` is a **fraction of current paper cash**, not a quantity and
+    not a notional. The engine derives the quantity inside
+    ``PaperBroker.open_from_signal`` from its own fill price, so a number the
+    transport computed could disagree with the fill it was priced against.
+    Fraction in, engine-owned quantity out - which is also what keeps exposure
+    bounded by cash without this transport having to know a price.
+
+    Typed as ``float`` and **not** constrained here. The authoritative range
+    check lives in :func:`crypto_paper_lab.high_risk.coerce_risk_fraction`, which
+    is where the ceiling and the wording live; duplicating the bounds in a
+    Pydantic constraint would give two places to change and let the two drift.
+    ``extra="forbid"`` still applies, so an unknown field is a 422 rather than a
+    silently ignored key.
+
+    Accepted range: finite, ``> 0``, ``<= 1.0``. The ``<= 1.0`` ceiling is the
+    broker's own and is what makes leverage unreachable; out-of-range values are
+    **refused, never clamped**, because a silently trimmed size would commit a
+    position the user did not ask for.
+    """
+
+    risk_fraction: float = Field(
+        description="Share of current paper cash to commit to each position, as a "
+                    "fraction. Must be finite and greater than 0, and at most "
+                    f"{MAX_RISK_FRACTION} - a larger value would require more "
+                    "capital than the paper account holds. Rejected, never clamped."
+    )
+
+    @field_validator("risk_fraction", mode="before")
+    @classmethod
+    def _reject_non_numeric(cls, value: object) -> object:
+        """Refuse a ``bool`` and a non-numeric string before Pydantic coerces them.
+
+        ``bool`` is an ``int`` subclass, so Pydantic would turn ``true`` into
+        ``1.0`` - the maximum legal size - and this mode would commit the whole
+        paper account to a request that never mentioned a fraction. That is the
+        worst failure available for this field, so it is refused at the edge rather
+        than reaching the engine as a plausible-looking maximum.
+
+        A **numeric string** is refused too, and that is stricter than Pydantic's
+        default. In lax mode ``"0.3"`` becomes the float ``0.3``, so a JSON client
+        sending a quoted number would be silently accepted. The value has one
+        correct representation here, and accepting two would mean the API and the
+        UI could disagree about what was actually configured.
+
+        This mirrors ``ManualActionRequest._reject_non_numeric``, so the two modes
+        handle a boolean identically rather than one guarding and one not.
+        """
+
+        if isinstance(value, bool):
+            raise ValueError("risk_fraction must be a fraction, not a boolean")
+
+        if isinstance(value, str):
+            raise ValueError(
+                "risk_fraction must be a JSON number, not a string; a quoted "
+                "number would be silently accepted as a different value"
+            )
+
+        return value
+
+
+class HighRiskStateResponse(_Strict):
+    """High-Risk's authoritative paper state.
+
+    Served **only** from ``/api/high-risk``. No field of this model appears on
+    ``/api/account``, ``/api/position``, ``/api/trades``, ``/api/statistics``,
+    ``/api/replay``, ``/api/ai``, ``/api/manual`` or ``/api/daily-target``, all
+    of which keep describing their own modes.
+
+    Every money figure is the broker's own. ``exposure`` and ``exposure_fraction``
+    are the one derived pair, and they are the arithmetic identity
+    ``entry_price * quantity`` of two fields :class:`PaperBroker` already owns -
+    computed in the session so no client has to, and satisfying
+    ``exposure <= paper_cash`` because the broker refuses any
+    ``risk_fraction > 1.0`` before it sizes anything.
+
+    Absent by design, because the engine cannot authoritatively produce them:
+    equity, mark price, unrealized P&L, margin, buying power, reserved capital,
+    liquidation price, leverage.
+    """
+
+    mode: str = Field(description="Always 'high_risk'.")
+
+    label: str = Field(
+        description="Human-facing mode name. Carries 'Paper Trading' so the mode "
+                    "never appears without the word that says what it is."
+    )
+
+    available: bool = Field(description="Whether the mode is usable.")
+
+    risk_fraction: float = Field(
+        description="Share of current paper cash committed to each position right "
+                    "now. Applies to the next entry."
+    )
+
+    max_risk_fraction: float = Field(
+        description="The engine's hard ceiling. Exposure cannot exceed paper cash, "
+                    "so this is the largest position the mode can take."
+    )
+
+    paper_cash: float = Field(
+        description="PaperBroker.cash. Not equity: the engine values no open "
+                    "position, and cash is never debited on entry."
+    )
+
+    starting_balance: float = Field(description="PaperBroker.starting_balance.")
+
+    realized_pnl: float = Field(
+        description="cash - starting_balance, the engine's own definition. Never "
+                    "includes an unrealized amount."
+    )
+
+    trade_count: int = Field(description="Entries in PaperBroker.journal.")
+
+    open_position: PositionResponse | None = Field(
+        default=None,
+        description="The open paper trade, or null. Always at most one.",
+    )
+
+    exposure: float = Field(
+        description="entry_price * quantity of the open trade, or 0.0 when flat. "
+                    "Never greater than paper_cash."
+    )
+
+    exposure_fraction: float = Field(
+        description="exposure / paper_cash, or 0.0 when flat or with no cash."
+    )
+
+    position_count: int = Field(
+        description="0 or 1. PaperBroker holds one open_trade, so this can never "
+                    "exceed one."
+    )
+
+    max_positions: int = Field(
+        description="The policy's position limit. 1, and it is the broker's own "
+                    "single-position rule rather than a policy preference."
+    )
+
+    exit_counts: dict[str, int] = Field(
+        description="Tally of closed trades by exit reason. The frozen baseline "
+                    "produces only 'opposite_signal' and 'end_of_data'."
+    )
+
+    last_signal: ReplaySignalModel | None = Field(
+        default=None,
+        description="The strategy's most recent observation. 'flat' is a normal "
+                    "outcome, not an error. High-Risk adds no qualification rule, "
+                    "so this is exactly the signal Standard saw at this cursor."
+    )
+
+    inherits_note: str = Field(
+        description="The scope statement, served so a client cannot drop it: "
+                    "High-Risk introduces no new signal qualification rule and "
+                    "inherits Standard's signal set."
+    )
+
+    note: str = Field(
+        description="What this mode is, and what 'high risk' means here: more "
+                    "paper capital per position, never leverage."
+    )
+
+    caution: str = Field(
+        description="The measured friction warning. Costs grow with position "
+                    "size and at the maximum setting exceed the strategy's gross "
+                    "result on the frozen dataset."
+    )
+
+    replay: ReplayStateResponse = Field(
+        description="The shared replay state: cursor, status, identities."
+    )
+
+    @classmethod
+    def from_session(cls, session) -> "HighRiskStateResponse":
+        """Build from a :class:`~paper_api.highrisksession.HighRiskSession`.
+
+        The session's own projection is passed through rather than recomputed
+        here, for the same reason ``ManualStateResponse.from_session`` and
+        ``DailyTargetResponse.from_session`` do: a transport that re-derived
+        exposure or realized P&L would be a second accounting implementation.
+        """
+
+        from crypto_paper_lab.high_risk import HIGH_RISK_NOTE
+        from crypto_paper_lab.modes import HIGH_RISK as HIGH_RISK_MODE
+        from paper_api.highrisksession import HIGH_RISK_LABEL
+
+        # Imported here, as in every other ``from_*`` above: the timestamp helper
+        # belongs to the market-data layer, and this transport reads candles through
+        # it rather than assuming the engine's datetimes are already UTC-aware.
+        from .marketdata import as_utc
+
+        state = session.high_risk_state()
+
+        position = state.open_position
+        signal = state.last_signal
+
+        return cls(
+            mode=HIGH_RISK_MODE,
+            label=HIGH_RISK_LABEL,
+            available=True,
+            risk_fraction=state.risk_fraction,
+            max_risk_fraction=state.max_risk_fraction,
+            paper_cash=state.paper_cash,
+            starting_balance=state.starting_balance,
+            realized_pnl=state.realized_pnl,
+            trade_count=state.trade_count,
+            open_position=(
+                PositionResponse(
+                    side=position.side,
+                    entry_time=as_utc(position.entry_time),
+                    entry_price=position.entry_price,
+                    quantity=position.quantity,
+                    reason=position.reason,
+                    raw_entry_price=position.raw_entry_price,
+                    signal_close=position.signal_close,
+                    trend_state=position.trend_state,
+                    breakout_distance=position.breakout_distance,
+                    retest_distance=position.retest_distance,
+                    realised_volatility=position.realised_volatility,
+                    mean_range=position.mean_range,
+                    support_at_entry=position.support_at_entry,
+                    resistance_at_entry=position.resistance_at_entry,
+                )
+                if position is not None
+                else None
+            ),
+            exposure=state.exposure,
+            exposure_fraction=state.exposure_fraction,
+            position_count=state.position_count,
+            max_positions=state.max_positions,
+            exit_counts=dict(state.exit_counts),
+            last_signal=(
+                ReplaySignalModel(
+                    timestamp=as_utc(signal.timestamp),
+                    side=signal.side,
+                    reason=signal.reason,
+                    price=signal.price,
+                    support=signal.support,
+                    resistance=signal.resistance,
+                    trend=signal.trend,
+                    breakout=signal.breakout,
+                    retest=signal.retest,
+                    signal_close=signal.signal_close,
+                    trend_state=signal.trend_state,
+                    breakout_distance=signal.breakout_distance,
+                    retest_distance=signal.retest_distance,
+                    realised_volatility=signal.realised_volatility,
+                    mean_range=signal.mean_range,
+                )
+                if signal is not None
+                else None
+            ),
+            inherits_note=state.inherits_note,
+            note=HIGH_RISK_NOTE,
+            caution=state.caution,
+            replay=ReplayStateResponse.from_state(state.replay, mode=HIGH_RISK_MODE),
         )

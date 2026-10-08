@@ -528,9 +528,40 @@ def test_no_order_or_execution_surface(closed_trades_client: TestClient) -> None
     for path in (
         "/orders", "/api/order", "/api/execute",
         "/api/position/close", "/api/position/open",
-"/api/alerts", "/api/daily", "/api/high-risk",
+"/api/alerts", "/api/daily",
    ):
         assert closed_trades_client.get(path).status_code == 404, path
+
+    # Phase 26B removed ``/api/high-risk`` from this list. It is a *mode contract*
+    # - a read of High-Risk's own paper state plus its one validated size setting -
+    # not an order surface: nothing on it submits, fills or closes anything, and
+    # High-Risk's entries come from the shared ``/api/replay/step`` route exactly as
+    # every other automatic mode's do. Its own absence-from-other-endpoints test
+    # lives in test_high_risk.py.
+
+
+def test_high_risk_exposes_no_order_surface(closed_trades_client: TestClient) -> None:
+    """The property that matters now that ``/api/high-risk`` exists.
+
+    A mode-specific route is fine; a mode-specific **verb that trades** is not.
+    High-Risk must offer no way to open, close or size a position directly - the
+    strategy does that, and sizing has only one input the user may set.
+    """
+
+    for path in (
+        "/api/high-risk/step",
+        "/api/high-risk/start",
+        "/api/high-risk/pause",
+        "/api/high-risk/reset",
+        "/api/high-risk/action",
+        "/api/high-risk/execute",
+        "/api/high-risk/order",
+    ):
+        for method in ("get", "post"):
+            assert getattr(closed_trades_client, method)(path).status_code in (
+                404,
+                405,
+            ), f"{method.upper()} {path} must not exist"
 
 
 def _code_only(path) -> str:

@@ -445,19 +445,30 @@ describe("mode capability predicates", () => {
     expect(isControllableMode(alerts)).toBe(false);
   });
 
-  // `daily_target` left this group in Phase 24B, when it became executable. It is now
-  // asserted to be controllable in its own right, so the reservation predicates stay
-  // pinned to the two modes that are genuinely still reserved.
-  it("treats the remaining reserved modes as neither", () => {
-    // `manual` left this group in Phase 25B, when it became executable. The
-    // reservation predicates are now pinned to the one mode still reserved.
-    for (const name of ["high_risk"]) {
-      const mode = MODES.modes.find((m) => m.mode === name)!;
+  // `daily_target` left this group in Phase 24B, `manual` in 25B and `high_risk` in
+  // 26B, each when it became executable. Every mode Phase 17A named is now
+  // executable, so there is **nothing reserved**: `high_risk` was the last one.
+  //
+  // The loop is kept, empty, rather than deleted. It is what will assert the
+  // reservation predicates again the moment a mode is reserved, and removing it would
+  // lose that for no benefit.
+  it("treats any reserved mode as neither, and today there are none", () => {
+    const reserved = MODES.modes.filter((m) => !m.available);
 
-      expect(mode.available).toBe(false);
+    expect(reserved).toHaveLength(0);
+
+    for (const mode of reserved) {
       expect(isControllableMode(mode)).toBe(false);
       expect(isObservationOnlyMode(mode)).toBe(false);
     }
+  });
+
+  it("treats high_risk as controllable", () => {
+    const highRisk = MODES.modes.find((m) => m.mode === "high_risk")!;
+
+    expect(highRisk.available).toBe(true);
+    expect(isControllableMode(highRisk)).toBe(true);
+    expect(isObservationOnlyMode(highRisk)).toBe(false);
   });
 
   it("treats manual as controllable", () => {

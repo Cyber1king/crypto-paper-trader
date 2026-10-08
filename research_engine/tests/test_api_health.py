@@ -205,6 +205,8 @@ def test_only_the_permitted_routes_exist(client: TestClient) -> None:
         "/api/manual",
         "/api/manual/action",
         "/api/manual/cancel",
+        "/api/high-risk",
+        "/api/high-risk/config",
         "/api/replay/start",
         "/api/replay/pause",
         "/api/replay/step",
@@ -218,9 +220,8 @@ def test_only_the_permitted_routes_exist(client: TestClient) -> None:
         "/orders",
         "/api/order",
         "/api/execute",
-"/api/alerts",
-   "/api/daily",
-   "/api/high-risk",
+        "/api/alerts",
+        "/api/daily",
         "/api/equity",
         "/api/position/close",
         "/api/position/close-all",
@@ -269,6 +270,15 @@ def test_deferred_routes_do_not_exist(client: TestClient, path: str) -> None:
     ``409 UNSUPPORTED_REVERSAL`` rather than offering an atomic exit-then-entry, because
     two fills inside one broker call would charge a full round of costs on a trade the
     user never chose to close.
+
+    Phase 26B **removed** ``/api/high-risk`` from this list, the fourth time a mode
+    has landed a contract on a name this file deferred. What High-Risk adds is
+    ``/api/high-risk`` and ``/api/high-risk/config``, tested in
+    ``test_high_risk.py``. What deliberately stays absent is every **separate**
+    lifecycle verb: ``/api/high-risk/step``, ``/start``, ``/pause`` and ``/reset``.
+    High-Risk progresses through the same ``/api/replay/*`` routes every other
+    executable mode uses, with ``?mode=high_risk``. Separate verbs would be a second
+    way to do one thing - the exact reason ``/api/ai/step`` stays absent.
     """
 
     assert client.get(path).status_code == 404
@@ -353,6 +363,11 @@ ALLOWED_ENGINE_IMPORTS = {
                        # BOTH an entry and an exit, so every trade in Manual is the
                        # user's. The session reads it to build the mode's replay, and
                        # no other engine module imports it
+    "high_risk",   # Phase 26B. HighRiskConfig - the single validated sizing
+                      # setting. It holds no broker and no prices: the mode reuses
+                      # `replay` and `simulator` unchanged and passes the value
+                      # straight to the broker's own risk_fraction path. It defines
+                      # no policy, because AUTOMATIC_POLICY already decides this mode
     "daily_target", # Phase 24B. DailyTargetConfig/Tracker/Policy - the day
                      # bookkeeping and the single entry refusal. It holds no broker
                      # and no prices, and Daily Target reuses `replay` and `simulator`

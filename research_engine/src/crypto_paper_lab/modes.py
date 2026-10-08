@@ -119,11 +119,14 @@ execution engine was written. Its entire contract is one entry refusal, expresse
 :class:`~crypto_paper_lab.daily_target.DailyTargetPolicy`. The day bookkeeping lives in
 :mod:`crypto_paper_lab.daily_target` and holds no broker.
 
-``manual`` and ``high_risk`` remain reserved. High-Risk qualification rules are open
-question Q6 and must be pre-registered as research before they are implemented;
-Manual has no contract at all, since "the operator decides" is not an automatic
-policy. Reserving their names means a typo cannot create a silent new mode, and
-requesting one fails explicitly instead of falling back to Standard.
+``high_risk`` remains reserved. High-Risk's *qualification rules* are still open
+question Q6 and must be pre-registered as research before any mode may add one.
+Manual and High-Risk both deliberately add none: Manual has no contract at all,
+since "the operator decides" is not an automatic policy, and High-Risk inherits
+Standard's signal set and differs only in how much paper cash each position
+commits (Phase 26B, :mod:`crypto_paper_lab.high_risk`). Reserving a name means a
+typo cannot create a silent new mode, and requesting a reserved one fails
+explicitly instead of falling back to Standard.
 """
 from __future__ import annotations
 
@@ -142,6 +145,12 @@ from .daily_target import (
     TARGET_NOTE,
     WAITING_NOTE,
 )
+from .high_risk import (
+    DEFAULT_RISK_FRACTION,
+    HIGH_RISK_NOTE as HIGH_RISK_MODE_NOTE,
+    MAX_RISK_FRACTION,
+    MODE_LABEL as HIGH_RISK_LABEL,
+)
 from .manual_paper import (
     MANUAL_POLICY,
     MAX_SIZE_PCT,
@@ -150,7 +159,6 @@ from .manual_paper import (
 )
 from .execution import (
     AUTOMATIC_POLICY,
-    DisabledPolicy,
     ExecutionPolicy,
     IntelligencePolicy,
 )
@@ -166,11 +174,15 @@ __all__ = [
     "DEFAULT_MAX_POSITIONS",
     "DEFAULT_MODE",
     "DEFAULT_PROFIT_TARGET_PCT",
+    "DEFAULT_RISK_FRACTION",
     "DEFAULT_TARGET_AMOUNT",
     "DEFAULT_THRESHOLD",
+    "HIGH_RISK",
+    "HIGH_RISK_LABEL",
     "MANUAL",
     "MANUAL_LABEL",
     "MANUAL_POLICY",
+    "MAX_RISK_FRACTION",
     "MAX_SIZE_PCT",
     "MODES",
     "ModeError",
@@ -209,9 +221,16 @@ DAILY_TARGET = "daily_target"
 #: because it permits one position and adds nothing the single-position broker lacks.
 MANUAL = "manual"
 
-#: Names Phase 17A defined for later phases, still unbuilt. Reserved here so they
-#: cannot be invented by accident and so requesting one fails loudly.
-RESERVED_HIGH_RISK = "high_risk"
+#: Standard's own strategy, entered on the same signals, with a larger share of
+#: paper cash committed to each position. Implemented Phase 26B: see
+#: :mod:`crypto_paper_lab.high_risk`.
+#:
+#: Introduces **no new qualification rule**, so Phase 17A's open question Q6 does
+#: not gate it: it inherits the signal set Standard already trades. The only
+#: difference is ``risk_fraction``, passed to the *existing* ``Replay`` sizing seam
+#: and bounded by the *existing* broker ceiling of 1.0 - which is what makes
+#: leverage unreachable rather than merely forbidden.
+HIGH_RISK = "high_risk"
 
 
 class ModeError(ValueError):
@@ -370,12 +389,23 @@ MODES: Mapping[str, ModeSpec] = {
             policy=MANUAL_POLICY,
         ),
         ModeSpec(
-            mode=RESERVED_HIGH_RISK,
-            label="High-Risk Paper",
+            mode=HIGH_RISK,
+            # The label carries "Paper Trading", so the name never appears without
+            # the word that says what it is.
+            label=HIGH_RISK_LABEL,
             supports_execution=True,
-            available=False,
-            note="Reserved. The mode contract is defined in Phase 17G.",
-            policy=DisabledPolicy(name="reserved_high_risk"),
+            available=True,
+            # The note states the scope boundary Phase 26A required be explicit -
+            # that this mode adds no qualification rule - and then says in plain
+            # words that the extra risk is *more of your own paper cash per
+            # position*, which is the one thing the mode actually changes.
+            note=HIGH_RISK_MODE_NOTE,
+            # AUTOMATIC_POLICY, deliberately. High-Risk changes no decision: same
+            # signals, same entries, same opposite-signal close-and-reverse, same
+            # one-position limit. The difference is `risk_fraction`, which is a
+            # `Replay` constructor argument and not a policy concern at all - so
+            # there is no HighRiskPolicy to write. See crypto_paper_lab.high_risk.
+            policy=AUTOMATIC_POLICY,
         ),
     )
 }

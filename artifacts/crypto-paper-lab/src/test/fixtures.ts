@@ -24,6 +24,7 @@ import {
   type ApiError,
   type DailyTargetResponse,
   type HealthResponse,
+  type HighRiskStateResponse,
   type ManualStateResponse,
   type MarketResponse,
   type ModeInfo,
@@ -87,11 +88,11 @@ export const MODES: ModesResponse = {
     },
     {
       mode: "high_risk",
-      label: "High-Risk Paper",
+      label: "High-Risk \u2014 Paper Trading",
       supports_execution: true,
-      available: false,
-      note: "Reserved. The mode contract is defined in Phase 17G.",
-      policy: { name: "reserved_high_risk", max_positions: 0 },
+      available: true,
+      note: "Standard's own breakout and retest strategy, entered on the same signals, with a larger share of paper cash committed to each position. High-Risk introduces no new signal qualification rule and inherits Standard's signal set. Exposure never exceeds the paper cash you hold: there is no leverage, no margin, no borrowing and no liquidation. Simulation only, not a real position.",
+      policy: { name: "automatic", max_positions: 1 },
     },
   ],
 };
@@ -669,6 +670,132 @@ export const MANUAL_WITH_TRADE: ManualStateResponse = {
     },
   ],
   replay: { ...REPLAY_STEPPED, mode: "manual" },
+};
+
+// ---------------------------------------------------------------------------
+// High-Risk (Phase 26B)
+// ---------------------------------------------------------------------------
+
+/**
+ * The engine's scope statement, copied from `crypto_paper_lab/high_risk.py`.
+ *
+ * Pinned verbatim because it is the one sentence that stops "High-Risk" reading as
+ * leverage or as a strategy that trades something Standard rejects.
+ */
+export const HIGH_RISK_INHERITS_NOTE =
+  "High-Risk introduces no new signal qualification rule and inherits Standard's signal set.";
+
+/** What the mode is, and what "high risk" means here. Copied from the engine. */
+export const HIGH_RISK_NOTE =
+  "Standard's own breakout and retest strategy, entered on the same signals, " +
+  "with a larger share of paper cash committed to each position. High-Risk " +
+  "introduces no new signal qualification rule and inherits Standard's signal " +
+  "set. Exposure never exceeds the paper cash you hold: there is no leverage, " +
+  "no margin, no borrowing and no liquidation. Simulation only, not a real " +
+  "position.";
+
+/** The measured friction caution. Copied from the engine. */
+export const HIGH_RISK_CAUTION =
+  "On the frozen dataset, costs grow with position size and at the maximum " +
+  "setting they exceed the strategy's gross result. More paper capital per " +
+  "position means more fees and slippage, not a better outcome.";
+
+export const HIGH_RISK_FLAT: HighRiskStateResponse = {
+  mode: "high_risk",
+  label: "High-Risk \u2014 Paper Trading",
+  available: true,
+  risk_fraction: 0.25,
+  max_risk_fraction: 1.0,
+  paper_cash: 10000.0,
+  starting_balance: 10000.0,
+  realized_pnl: 0.0,
+  trade_count: 0,
+  open_position: null,
+  exposure: 0.0,
+  exposure_fraction: 0.0,
+  position_count: 0,
+  max_positions: 1,
+  exit_counts: {},
+  last_signal: null,
+  inherits_note: HIGH_RISK_INHERITS_NOTE,
+  note: HIGH_RISK_NOTE,
+  caution: HIGH_RISK_CAUTION,
+  replay: REPLAY_IDLE,
+};
+
+/**
+ * A 25% position on $10,000 of paper cash.
+ *
+ * The figures are the engine's own at `risk_fraction=0.25` on the frozen dataset:
+ * the entry filled at the execution bar's open of 43,679.70 and
+ * `quantity = (cash * 0.25) / fill`, so exposure is exactly $2,500.00.
+ */
+export const HIGH_RISK_HOLDING_LONG: HighRiskStateResponse = {
+  ...HIGH_RISK_FLAT,
+  open_position: {
+    side: "long",
+    entry_time: "2024-01-01T22:00:00Z",
+    entry_price: 43679.7,
+    quantity: 0.05723482533076006,
+    reason: "bullish retest",
+    raw_entry_price: 43679.7,
+    signal_close: 43679.8,
+    trend_state: "up",
+    breakout_distance: 0.0011200000000000009,
+    retest_distance: 0.0012,
+    realised_volatility: 0.008412000000000001,
+    mean_range: 410.8400000000001,
+    support_at_entry: 42940.0,
+    resistance_at_entry: 44598.0,
+  },
+  exposure: 2500.0,
+  exposure_fraction: 0.25,
+  position_count: 1,
+  last_signal: {
+    timestamp: "2024-01-01T21:00:00Z",
+    side: "long",
+    reason: "bullish retest",
+    price: 43679.8,
+    support: 42940.0,
+    resistance: 44598.0,
+    trend: "up",
+    breakout: false,
+    retest: true,
+    signal_close: 43679.8,
+    trend_state: "up",
+    breakout_distance: 0.0011200000000000009,
+    retest_distance: 0.0012,
+    realised_volatility: 0.008412000000000001,
+    mean_range: 410.8400000000001,
+  },
+};
+
+/** After a full run at the default 25%: the exact measured figures. */
+export const HIGH_RISK_FINISHED: HighRiskStateResponse = {
+  ...HIGH_RISK_FLAT,
+  paper_cash: 6645.213326107787,
+  realized_pnl: -3354.786673892213,
+  trade_count: 344,
+  exit_counts: { opposite_signal: 343, end_of_data: 1 },
+  replay: { ...REPLAY_IDLE, status: "finished" },
+};
+
+/** A short position, to prove the panel is not long-only. */
+export const HIGH_RISK_HOLDING_SHORT: HighRiskStateResponse = {
+  ...HIGH_RISK_FLAT,
+  risk_fraction: 0.5,
+  open_position: {
+    ...HIGH_RISK_HOLDING_LONG.open_position!,
+    side: "short",
+    entry_time: "2024-01-03T12:00:00Z",
+    entry_price: 43728.9,
+    quantity: 0.11434223898227368,
+    reason: "downtrend breakdown",
+    trend_state: "down",
+  },
+  exposure: 5000.0,
+  exposure_fraction: 0.5,
+  position_count: 1,
 };
 
 // ---------------------------------------------------------------------------

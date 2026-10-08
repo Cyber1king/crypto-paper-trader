@@ -15,8 +15,10 @@ of configurations, and any test that would require re-running research.
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import re
+import tokenize
 from pathlib import Path
 
 import pytest
@@ -27,6 +29,32 @@ ROOT = Path(__file__).resolve().parents[1]
 PHASE15 = ROOT / "experiments/phase15"
 STATE_PATH = PHASE15 / "RESEARCH_STATE.json"
 CHECKPOINT_PATH = PHASE15 / "RESEARCH_CHECKPOINT.md"
+
+
+def code_only(path: Path) -> str:
+    """Source text with comments and string literals removed.
+
+    Copied from ``test_modes.py``'s identically-named helper rather than imported:
+    test modules are not a package, and duplicating a dozen lines is cheaper than
+    adding one.
+    """
+
+    kept: list[str] = []
+
+    with io.open(path, "rb") as handle:
+        for token in tokenize.tokenize(handle.readline):
+            if token.type in (
+                tokenize.COMMENT,
+                tokenize.STRING,
+                tokenize.NL,
+                tokenize.NEWLINE,
+                tokenize.INDENT,
+                tokenize.DEDENT,
+            ):
+                continue
+            kept.append(token.string)
+
+    return " ".join(kept)
 
 
 @pytest.fixture(scope="module")
@@ -206,12 +234,30 @@ def test_recorded_position_model_matches_phase13_constants(
 
 
 def test_declared_capability_absences_are_actually_absent(state: dict) -> None:
-    """A documented absence must be true of the source, not merely asserted."""
+    """A documented absence must be true of the source, not merely asserted.
+
+    Phase 26B widened this check from raw file text to **code only**.
+
+    ``high_risk.py`` has to explain why the mode it defines has no leverage and no
+    margin, and a docstring saying "there is no leverage" cannot avoid the word. The
+    original raw-text scan therefore failed on a *denial*, which is the opposite of
+    what this test exists to catch: a denial cannot create a capability.
+
+    The invariant actually protected is that no such mechanism is **implemented**. So
+    the scan now runs over the package with comments and string literals tokenised
+    away - the same helper ``test_modes.py`` uses - and a term counts as present only
+    if it names a function, a parameter, an attribute or any other executable
+    construct.
+
+    Everything else is unchanged: the same terms, the same word boundaries, and a real
+    violation still fails. A ``margin=`` keyword, a ``leverage`` attribute or a
+    ``borrow`` helper would all still be caught, because those are code.
+    """
 
     package = ROOT / "src/crypto_paper_lab"
+
     text = "\n".join(
-        path.read_text(encoding="utf-8")
-        for path in sorted(package.glob("*.py"))
+        code_only(path) for path in sorted(package.glob("*.py"))
     ).lower()
 
     # Terms whose absence is meaningful. Matched on word boundaries so that

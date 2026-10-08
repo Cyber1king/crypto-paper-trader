@@ -852,11 +852,10 @@ class TestIsolation:
 
         assert standard.snapshot().balance == balance_before
 
-    def test_reserved_modes_remain_reserved(self) -> None:
-        # ``manual`` left this group in Phase 25B, when it gained a contract. Only
-        # ``high_risk`` is still reserved, and its reservation is unchanged.
-        assert reserved_modes() == ("high_risk",)
-        assert mode_spec("high_risk").available is False
+        # Nothing is reserved now: ``manual`` left this group in Phase 25B and
+        # ``high_risk`` in Phase 26B, each when it gained a contract.
+        assert reserved_modes() == ()
+        assert mode_spec("high_risk").available is True
         assert DAILY_TARGET not in reserved_modes()
 
 
@@ -982,7 +981,9 @@ class TestTransport:
                 max(day["target_amount"] - day["realized_pnl"], 0.0)
             )
 
-    @pytest.mark.parametrize("mode", ["standard", "ai_intelligence", "alerts", "manual"])
+    @pytest.mark.parametrize(
+    "mode", ["standard", "ai_intelligence", "alerts", "manual", "high_risk"]
+)
     def test_the_read_route_refuses_other_modes(self, mode: str) -> None:
         response = client_for().get(f"/api/daily-target?mode={mode}")
 
@@ -1201,11 +1202,11 @@ class TestModeRegistration:
     def test_other_modes_are_unchanged(self) -> None:
         assert mode_spec(STANDARD).available is True
         assert mode_spec(AI_INTELLIGENCE).available is True
-        assert mode_spec(ALERTS).supports_execution is False
-        # Manual became executable in Phase 25B and is no longer reserved; High-Risk
-        # still is. Neither is a change to Daily Target's own contract.
+        # Manual became executable in Phase 25B and High-Risk in Phase 26B;
+        # neither is reserved any more. Neither is a change to Daily Target's own
+        # contract.
         assert mode_spec("manual").available is True
-        assert mode_spec("high_risk").available is False
+        assert mode_spec("high_risk").available is True
 
     def test_the_policy_is_a_module_constant(self) -> None:
         assert isinstance(DAILY_TARGET_POLICY, DailyTargetPolicy)
