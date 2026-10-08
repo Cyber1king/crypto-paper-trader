@@ -86,8 +86,19 @@ COSTS = phase13_costs()
 REQUIRED = 22
 PREFIX = 400
 
-#: Phase 17A names four product modes. Three have no contract until 17G.
-RESERVED_FROM_ARCHITECTURE = ("daily_target", "manual", "high_risk")
+#: Phase 17A names four product modes. Two still have no contract: ``manual`` has
+#: none at all ("the operator decides" is not an automatic policy), and
+#: ``high_risk``'s qualification rules are open question Q6, which the architecture
+#: requires to be pre-registered as research before implementation.
+#:
+#: ``daily_target`` left this tuple in Phase 24B. Its contract was already fully
+#: specified in architecture section 10 and its open questions Q4 and Q5 were
+#: measurement and presentation calls rather than research, so it became an
+#: implemented mode. ``ALERTS`` likewise stopped being reserved in 17G.
+RESERVED_FROM_ARCHITECTURE = ("manual", "high_risk")
+
+#: Modes the architecture named and that are now implemented and executable.
+IMPLEMENTED_FROM_ARCHITECTURE = ("daily_target",)
 
 
 def code_only(path: pathlib.Path) -> str:
@@ -266,26 +277,44 @@ class TestModeIdentities:
         for mode in known_modes():
             assert mode in str(info.value)
 
-    def test_the_architectures_own_mode_names_are_reserved(self) -> None:
-        """17A named four modes. The three without contracts are reserved."""
+    def test_the_architectures_own_mode_names_are_recognised(self) -> None:
+        """Every name 17A introduced is still recognised, implemented or not.
+
+        This is the property the reservation was for: a typo must fail as *unknown*
+        rather than becoming a silent new mode. It deliberately does not assert
+        *which* modes are reserved, because that set changes as contracts land - it
+        did for ``alerts`` in 17G and for ``daily_target`` in 24B.
+        """
+
+        for mode in RESERVED_FROM_ARCHITECTURE + IMPLEMENTED_FROM_ARCHITECTURE:
+            assert mode in known_modes(), mode
+            assert isinstance(MODES[mode], ModeSpec)
+
+    def test_the_modes_still_without_a_contract_are_reserved(self) -> None:
+        """``manual`` and ``high_risk`` stay reserved until they have contracts."""
 
         for mode in RESERVED_FROM_ARCHITECTURE:
-            assert mode in known_modes(), mode
             assert mode in reserved_modes(), mode
             with pytest.raises(ModeNotAvailableError):
                 mode_policy(mode)
 
     def test_reserving_the_names_prevents_a_typo_becoming_a_new_mode(self) -> None:
-        """A near-miss is unknown, not a silent new mode and not Standard."""
+        """A near-miss is unknown, not a silent new mode and not Standard.
 
-        with pytest.raises(UnknownModeError):
-            mode_spec("daily-target")
+        ``daily-target`` stays a near-miss for every mode, including the ones that
+        are implemented: an unrecognised name must never resolve.
+        """
 
-        # The exact reserved name is recognised rather than unknown, and is
-        # refused where a policy or session is required.
-        assert mode_spec("daily_target").available is False
-        with pytest.raises(ModeNotAvailableError):
-            mode_policy("daily_target")
+        for near_miss in ("daily-target", "standard-mode", "alert"):
+            with pytest.raises(UnknownModeError):
+                mode_spec(near_miss)
+
+        # The exact reserved name is recognised rather than unknown, and is refused
+        # where a policy or session is required.
+        for mode in RESERVED_FROM_ARCHITECTURE:
+            assert mode_spec(mode).available is False, mode
+            with pytest.raises(ModeNotAvailableError):
+                mode_policy(mode)
 
     def test_default_mode_is_standard(self) -> None:
         assert DEFAULT_MODE == STANDARD
@@ -357,12 +386,25 @@ class TestModePolicyMapping:
 
         assert info.value.code == "MODE_NOT_AVAILABLE"
 
-    def test_only_standard_and_ai_intelligence_are_executable(self) -> None:
+    def test_the_executing_modes_are_exactly_the_implemented_ones(self) -> None:
+        """Executability follows an implemented contract, not a hard-coded list.
+
+        Written as a membership test over ``MODES`` so it keeps describing the
+        architecture - "available **and** declared to execute" - rather than pinning
+        today's mode names. That is why it survived ``daily_target`` being implemented
+        in Phase 24B without an edit here.
+        """
+
+        for mode in known_modes():
+            spec = MODES[mode]
+            expected = spec.available and spec.supports_execution
+
+            assert is_executable(mode) is expected, mode
+
+        # Spot-check the two that matter most, so a passing loop cannot hide a mode
+        # that became brokerless.
         assert is_executable(STANDARD) is True
-        assert is_executable(AI_INTELLIGENCE) is True
         assert is_executable(ALERTS) is False
-        for mode in RESERVED_FROM_ARCHITECTURE:
-            assert is_executable(mode) is False, mode
 
     def test_the_mapping_is_exhaustive_over_known_modes(self) -> None:
         for mode in known_modes():
@@ -919,13 +961,21 @@ class TestTransport:
         assert response.status_code == 422
         assert response.json()["detail"]["code"] == "INVALID_MODE"
 
-    def test_reserved_mode_is_rejected_with_409(self) -> None:
-        response = client_for().get(
-            "/api/replay", params={"mode": "daily_target"}
-        )
+    def test_a_still_reserved_mode_is_rejected_with_409(self) -> None:
+        """``manual`` is the exemplar: named in 17A, still without a contract.
 
-        assert response.status_code == 409
-        assert response.json()["detail"]["code"] == "MODE_NOT_AVAILABLE"
+        Was asserted against ``daily_target`` until Phase 24B implemented it. The
+        reservation property is unchanged - a recognised name with no contract is
+        refused with ``MODE_NOT_AVAILABLE``, not served as Standard and not reported
+        as unknown - so the test follows a mode that is still reserved rather than
+        tracking one that stopped being.
+        """
+
+        for mode in RESERVED_FROM_ARCHITECTURE:
+            response = client_for().get("/api/replay", params={"mode": mode})
+
+            assert response.status_code == 409, mode
+            assert response.json()["detail"]["code"] == "MODE_NOT_AVAILABLE", mode
 
     def test_alerts_is_rejected_with_409(self) -> None:
         response = client_for().get("/api/replay", params={"mode": ALERTS})

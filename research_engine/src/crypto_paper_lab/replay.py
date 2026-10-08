@@ -64,7 +64,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from datetime import datetime
-from typing import Literal
+from typing import Callable, Literal
 from uuid import uuid4
 
 from .backtest import (
@@ -506,10 +506,23 @@ class Replay:
         replay_id: str | None = None,
         dataset_sha256: str = DATASET_SHA256,
         ticker: Ticker | None = None,
+        daily_target: Callable[[], bool] | None = None,
     ) -> None:
         """
         Parameters
         ----------
+        daily_target:
+            Phase 24B. Optional hook returning whether a daily objective has been
+            met. Supplied only by the Daily Target session, and injected rather than
+            imported so ``Replay`` holds no reference to a tracker and keeps no
+            daily state of its own: it asks one question per decision and is told the
+            answer.
+
+            The default is ``None``, which every policy but ``DailyTargetPolicy``
+            reads as "no daily target", so a replay built without it behaves exactly
+            as before. The hook is read at *decision* time rather than cached, so a
+            target reached earlier in the same step is seen by the entry check that
+            follows the exit check.
         candles:
             The series to replay. Stored as a ``tuple`` of frozen ``Candle``
             dataclasses. A list is accepted and copied precisely so the caller
@@ -550,6 +563,10 @@ class Replay:
         self._starting_balance = starting_balance
         self._ticker = ticker if ticker is not None else OnDemandTicker()
         self._interval_ms = DEFAULT_INTERVAL_MS
+        # Phase 24B. A hook, never a tracker: ``Replay`` asks this and holds no
+        # daily state, so Daily Target's bookkeeping stays in the one object that
+        # owns it.
+        self._daily_target = daily_target
 
         required = minimum_history(self._config)
 
@@ -1093,7 +1110,24 @@ class Replay:
             bars_held=bars_held,
             exit_candidates=tuple(candidates),
             risk_fraction=self._risk_fraction,
+            # Phase 24B: a mode with a daily objective supplies this from its own
+            # tracker. Left as the default ``None`` here, which every policy but
+            # ``DailyTargetPolicy`` reads as "no daily target", so a ``Replay``
+            # serving Standard or AI produces exactly the context it did before.
+            daily_target_reached=self._daily_target_reached(),
         )
+
+    def _daily_target_reached(self) -> bool | None:
+        """Whether a daily objective has been met, for the policy's own use.
+
+        Delegates to the injected hook. Returning ``None`` - the default everywhere
+        except Daily Target - is what makes the field inert for every other mode.
+        """
+
+        if self._daily_target is None:
+            return None
+
+        return self._daily_target()
 
     def _finish(self) -> StepResult:
         """Apply end-of-data closure and mark the replay finished.

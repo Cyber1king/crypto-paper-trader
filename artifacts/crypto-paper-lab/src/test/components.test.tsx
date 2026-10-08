@@ -107,9 +107,13 @@ describe("mode rendering", () => {
     expect(
       screen.getByTestId("mode-alerts").getAttribute("data-executable"),
     ).toBe("false");
+    // `manual` is the reserved example now that daily_target is executable (Phase 24B).
+    expect(
+      screen.getByTestId("mode-manual").getAttribute("data-available"),
+    ).toBe("false");
     expect(
       screen.getByTestId("mode-daily_target").getAttribute("data-available"),
-    ).toBe("false");
+    ).toBe("true");
     expect(
       screen.getByTestId("mode-standard").getAttribute("data-executable"),
     ).toBe("true");
@@ -124,9 +128,12 @@ describe("mode rendering", () => {
     const label = (mode: string) =>
       (screen.getByTestId(`mode-${mode}`).textContent ?? "").toLowerCase();
 
-    expect(label("daily_target")).toContain("reserved");
+    expect(label("manual")).toContain("reserved");
     expect(label("alerts")).toContain("observation only");
     expect(label("standard")).toContain("executable");
+    // Daily Target is executable, and must be labelled as such rather than reserved.
+    expect(label("daily_target")).toContain("executable");
+    expect(label("daily_target")).not.toContain("reserved");
   });
 
   it("selects a reserved mode without executing anything", () => {
@@ -170,7 +177,9 @@ describe("mode rendering", () => {
 
 describe("unavailable mode behaviour", () => {
   it("shows the server's note for a reserved mode", () => {
-    const mode = modeNamed("daily_target");
+    // `manual`, not `daily_target`: the latter became executable in Phase 24B, so it
+    // no longer reaches UnavailableModePanel.
+    const mode = modeNamed("manual");
     const { container } = render(
       <UnavailableModePanel label={mode.label} note={mode.note} />,
     );
@@ -761,7 +770,7 @@ describe("market chart", () => {
 
   it("passes the engine's levels to the chart, and nothing when it reported none", () => {
     // Asserted through a data attribute rather than the emitted SVG, because
-    // recharts only creates a ReferenceLine once the chart has a non-zero size —
+    // recharts only creates a ReferenceLine once the chart has a non-zero size ï¿½
     // which never happens under jsdom, so the line itself is unobservable here.
     const signal = REPLAY_STEPPED.last_signal!;
     const withSignal = render(

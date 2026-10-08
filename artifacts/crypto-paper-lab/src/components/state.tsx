@@ -166,12 +166,23 @@ export function StatRow({
   tone = "default",
   hint,
   mono = true,
+  testId,
 }: {
   label: string;
   value: ReactNode;
   tone?: "default" | "success" | "destructive" | "muted";
   hint?: string;
   mono?: boolean;
+  /**
+   * Optional test hook for the value.
+   *
+   * Exists because several of these rows are asserted by their rendered text, and a
+   * label-plus-value row offers no reliable way to target one specific figure among
+   * many with identical formatting. `data-testid` cannot simply be passed through on
+   * the component, for the same reason it is dropped on `Panel`: hyphenated JSX
+   * attribute names escape TypeScript's prop checking and vanish at runtime.
+   */
+  testId?: string;
 }) {
   const toneClass =
     tone === "success"
@@ -214,6 +225,7 @@ export function StatRow({
        * than merely containing its last link.
        */}
       <span
+        data-testid={testId}
         className={`min-w-0 break-all ${mono ? "font-mono" : "font-sans"} font-semibold text-sm text-right ${toneClass}`}
       >
         {value}

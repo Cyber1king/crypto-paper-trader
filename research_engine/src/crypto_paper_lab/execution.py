@@ -172,6 +172,27 @@ class DecisionContext:
     #: *bookkeeping*, informational: a policy decides eligibility, never a size.
     available_capital: float | None = None
 
+    # -- Phase 24B additions -------------------------------------------------
+    #
+    # Added for Daily Target, which is the only mode that decides entries from
+    # accumulated state rather than from the signal in front of it.
+    #
+    # ``None`` means "the calling mode reports no daily target", and every policy
+    # except :class:`~crypto_paper_lab.daily_target.DailyTargetPolicy` ignores it.
+    # That is what keeps a ``Replay`` built for an unaware mode unchanged: the field
+    # defaults to the single-position world it already describes.
+
+    #: Whether this mode has already met its daily realized-P&L target, and must
+    #: therefore stop opening positions. ``None`` when the mode has no such target.
+    #:
+    #: A plain boolean rather than the P&L figure itself, for the same reason
+    #: ``intelligence_score`` is a number and not an object: a policy can compare it
+    #: and ignore it, but holding a state object would let a policy reach back into
+    #: the tracker and re-derive progress. The comparison happens once, in
+    #: :class:`~crypto_paper_lab.daily_target.DailyTargetTracker`, against broker
+    #: cash.
+    daily_target_reached: bool | None = None
+
     @property
     def can_open(self) -> bool:
         """Whether the engine currently permits an entry at all.

@@ -64,6 +64,15 @@ export interface ModePolicyIdentity {
   readonly max_positions: number;
   /** Only present on the AI policy. Absent elsewhere, not defaulted to zero. */
   readonly threshold?: number;
+  /**
+   * Only present on the Daily Target policy (Phase 24C).
+   *
+   * The policy's **default** objective in dollars. It is *not* the target in force:
+   * the user may have changed it, so the authoritative figure is
+   * `DailyTargetResponse.daily_target_amount`. A client must never render this as the
+   * current target.
+   */
+  readonly target_amount?: number;
 }
 
 export interface ModeInfo {
@@ -71,7 +80,10 @@ export interface ModeInfo {
   readonly label: string;
   /** Whether this mode may execute paper trades at all. False for Alerts. */
   readonly supports_execution: boolean;
-  /** Whether the mode is usable yet. False for the three reserved modes. */
+  /**
+   * Whether the mode is usable yet. False for the reserved modes — `manual` and
+   * `high_risk` as of Phase 24B.
+   */
   readonly available: boolean;
   /** Server-authored explanation. Rendered verbatim; never rewritten. */
   readonly note: string;
@@ -356,6 +368,113 @@ export interface AiState {
   readonly replay: ReplayState;
 }
 
+// ---------------------------------------------------------------------------
+// Daily Target (Phase 24B)
+// ---------------------------------------------------------------------------
+
+/**
+ * One finalized UTC day.
+ *
+ * Only **completed** days appear here. The current day is the top level of
+ * {@link DailyTargetResponse}, so a client never has to work out which entry is
+ * "today" from a list.
+ */
+export interface DailyResult {
+  /** The UTC calendar date, `YYYY-MM-DD`. */
+  readonly date: string;
+  /** Equity when that day opened: the carried paper cash, never a reset. */
+  readonly starting_balance: number;
+  /** Realized paper P&L for the day, after costs. Never unrealized. */
+  readonly realized_pnl: number;
+  /**
+   * The dollar objective that applied **on that day**.
+   *
+   * Recorded per day because the user may change the target mid-run, so a past day is
+   * reported against the target it was actually measured against.
+   */
+  readonly target_amount: number;
+  /** What that day still needed. Never negative. */
+  readonly remaining: number;
+  readonly reached: boolean;
+  readonly trades_closed: number;
+}
+
+/**
+ * Daily Target's authoritative daily state.
+ *
+ * ## The target is an objective, not a forecast
+ *
+ * `target_note`, `waiting_note` and `overshoot_note` are served by the **engine**, not
+ * authored here. They are rendered verbatim so the non-guarantee wording cannot drift
+ * between server and client, and so no component is left to phrase the caveat itself.
+ *
+ * `waiting_note` matters most: "daily target" otherwise reads as an instruction to
+ * trade until a number is hit, and the engine is the only party that can state
+ * truthfully that the strategy waits for valid signals instead.
+ *
+ * ## A fixed dollar amount, never a percentage
+ *
+ * `daily_target_amount` is the number the **user** chose. It is independent of the
+ * account balance and does not change at a UTC day boundary. There is deliberately no
+ * `target_pct` field: the Phase 24B percentage model made the objective scale with the
+ * account, so a growing balance silently demanded more profit each day, which is not
+ * what "I want to make $50 today" means.
+ *
+ * ## Null before the first step
+ *
+ * Every *day* field is `null` until the replay has stepped — there is no UTC date or
+ * day-opening balance yet. `daily_target_amount` is the exception and is never null,
+ * because it is a user setting rather than something derived from a day's activity.
+ * That is what lets the goal be shown and changed on an idle session.
+ *
+ * ## There is no unrealized figure, on purpose
+ *
+ * No `unrealized_pnl`, `equity` or `mark_price` field exists. The engine has no live
+ * price feed, so any such value would be invented, and the target is measured on
+ * realized P&L only.
+ */
+export interface DailyTargetResponse {
+  readonly mode: "daily_target";
+
+  /** Today's objective in dollars of realized paper P&L. */
+  readonly daily_target_amount: number;
+  /** The non-guarantee statement, verbatim from the engine. */
+  readonly target_note: string;
+  /** That the target is an objective rather than a signal. */
+  readonly waiting_note: string;
+  /** Why the target may be exceeded: realized P&L moves in whole trades. */
+  readonly overshoot_note: string;
+  /** Always true. Present so a client cannot present the target as exact. */
+  readonly overshoot_possible: boolean;
+
+  readonly current_date: string | null;
+  readonly day_starting_balance: number | null;
+  readonly realized_daily_pnl: number | null;
+  /** Never negative. Null before the first step. */
+  readonly remaining: number | null;
+  /** A fraction. May exceed 1 when a trade overshoots. Null before the first step. */
+  readonly progress: number | null;
+  readonly target_reached: boolean | null;
+
+  /** True when the user re-pointed the target while this day was open. */
+  readonly target_changed_during_day: boolean;
+
+  readonly days_completed: readonly DailyResult[];
+  readonly replay: ReplayState;
+}
+
+/**
+ * The body of `POST /api/daily-target/config`.
+ *
+ * One field, and it is a number of **dollars**. The contract has no percentage and no
+ * compounding option, because every one of those would make the target depend on the
+ * account balance rather than on the user's decision.
+ */
+export interface DailyTargetConfigRequest {
+  /** Finite and greater than 0. Rejected, never clamped. */
+  readonly target_amount: number;
+}
+
 /** Engine error codes the UI handles by name rather than by status alone. */
 export type ApiErrorCode =
   | "NETWORK_UNAVAILABLE"
@@ -564,6 +683,56 @@ export class PaperApi {
     return this.request<AiState>("GET", "/api/ai", undefined, signal);
   }
 
+  // -- Daily Target -------------------------------------------------------
+
+  /**
+   * Daily Target's authoritative daily state.
+   *
+   * Read-only, and the **only** source for this mode's daily figures. The route
+   * carries a `mode` parameter that defaults to `daily_target` rather than to
+   * Standard, because it serves exactly one mode; it is sent explicitly anyway so a
+   * reader is never left wondering which mode the response describes.
+   *
+   * Every value here comes from the engine. The client computes no target, measures no
+   * progress and derives no P&L, so there is nothing in this method that could
+   * disagree with the tracker that decided when to stop trading.
+   */
+  async getDailyTarget(signal?: AbortSignal): Promise<DailyTargetResponse> {
+    return this.request<DailyTargetResponse>(
+      "GET",
+      "/api/daily-target",
+      { mode: "daily_target" },
+      signal,
+    );
+  }
+
+  /**
+   * Set today's dollar target.
+   *
+   * Returns the **same shape as `getDailyTarget`**, because the server answers with the
+   * full daily projection. That is deliberate: a client sets the goal and renders the
+   * result from one payload, so "before" and "after" cannot come from two different
+   * contracts and disagree about what they mean.
+   *
+   * The amount is sent as typed rather than being clamped or rounded here. A target
+   * silently trimmed to something the user did not type would be worse than a visible
+   * rejection, so an invalid value is sent and the server's 422 is surfaced.
+   */
+  async setDailyTarget(
+    targetAmount: number,
+    signal?: AbortSignal,
+  ): Promise<DailyTargetResponse> {
+    const body: DailyTargetConfigRequest = { target_amount: targetAmount };
+
+    return this.request<DailyTargetResponse>(
+      "POST",
+      "/api/daily-target/config",
+      { mode: "daily_target" },
+      signal,
+      body,
+    );
+  }
+
   // -- projections --------------------------------------------------------
 
   async getAccount(signal?: AbortSignal): Promise<AccountResponse> {
@@ -621,6 +790,16 @@ export class PaperApi {
     path: string,
     query?: Record<string, unknown>,
     signal?: AbortSignal,
+    /**
+     * Optional JSON request body.
+     *
+     * Added for `POST /api/daily-target/config`. Every other route here is a
+     * zero-argument command whose parameters all fit in the query string, so this is the
+     * first call with something to *say*. Sending `target_amount` as a query parameter
+     * instead would work only by accident of the server reading the query, and would
+     * leave a route that accepts an unset target whenever the query is dropped.
+     */
+    body?: unknown,
   ): Promise<T> {
     let response: Response;
 
@@ -628,7 +807,13 @@ export class PaperApi {
       response = await this.fetchImpl(this.buildUrl(path, query), {
         method,
         signal,
-        headers: { Accept: "application/json" },
+        // `Content-Type` is set only when there is a body: a GET declaring JSON would
+        // be inaccurate, and some intermediaries treat it as a preflight signal.
+        headers: {
+          Accept: "application/json",
+          ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+        },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       });
     } catch (cause) {
       // A server that is not running is the single most likely failure in local

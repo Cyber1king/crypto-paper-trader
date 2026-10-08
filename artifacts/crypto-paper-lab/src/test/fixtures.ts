@@ -22,6 +22,7 @@ import {
   type AiPosition,
   type AiState,
   type ApiError,
+  type DailyTargetResponse,
   type HealthResponse,
   type MarketResponse,
   type ModeInfo,
@@ -69,11 +70,11 @@ export const MODES: ModesResponse = {
     },
     {
       mode: "daily_target",
-      label: "Daily Target",
+      label: "Daily Target \u2014 Paper Trading",
       supports_execution: true,
-      available: false,
-      note: "Reserved. The mode contract is defined in Phase 17G.",
-      policy: { name: "reserved_daily_target", max_positions: 0 },
+      available: true,
+      note: "Aim for a fixed dollar amount of realized paper profit per UTC day, set by you and unchanged as the balance moves. Runs the frozen strategy and stops opening new positions once the day's realized P&L reaches it. One paper position, sized from paper cash with no credit facility. The target is a paper-trading objective, not a guaranteed return; the strategy waits for valid signals rather than trading to reach it, and realized P&L moves in whole trades so the target can be overshot.",
+      policy: { name: "daily_target", max_positions: 1, target_amount: 50.0 },
     },
     {
       mode: "manual",
@@ -419,6 +420,139 @@ export const AI_STATE_IDLE: AiState = {
 };
 
 // ---------------------------------------------------------------------------
+// Daily Target (Phase 24B/24C)
+// ---------------------------------------------------------------------------
+
+/**
+ * The engine's own wording, copied from `crypto_paper_lab/daily_target.py`.
+ *
+ * Duplicated rather than imported because the frontend cannot import Python, and the
+ * panel's contract is to render these verbatim. `daily-target.test.tsx` asserts the
+ * panel shows them and does not substitute its own phrasing, which is the check that
+ * keeps this copy honest.
+ */
+export const DAILY_TARGET_NOTE =
+  "Simulation objective only. Not a guaranteed return, not a forecast, and not a promise about any future result.";
+
+/**
+ * The most load-bearing string in the mode.
+ *
+ * "Daily target" otherwise reads as an instruction to trade until a number is hit, so
+ * the engine states plainly that it waits for valid signals instead. A panel that
+ * dropped this would be making a claim the engine never made.
+ */
+export const DAILY_WAITING_NOTE =
+  "The strategy may wait for valid signals. It will not trade just to reach the target.";
+
+export const DAILY_OVERSHOOT_NOTE =
+  "Realized paper P&L moves in whole trades, so the target can be overshot. It is a goal, not a precise threshold.";
+
+/**
+ * Daily Target before the replay's first step.
+ *
+ * Every *day* field is `null` while `daily_target_amount` is a real number, because the
+ * target is a user setting rather than something derived from a day's activity. This
+ * is the load-bearing fixture for two separate claims: the panel renders an empty state
+ * rather than a day starting balance of `0.00`, and it can still show and edit the
+ * target before a single bar has run.
+ */
+export const DAILY_TARGET_IDLE: DailyTargetResponse = {
+  mode: "daily_target",
+  daily_target_amount: 50.0,
+  target_note: DAILY_TARGET_NOTE,
+  waiting_note: DAILY_WAITING_NOTE,
+  overshoot_note: DAILY_OVERSHOOT_NOTE,
+  overshoot_possible: true,
+  current_date: null,
+  day_starting_balance: null,
+  realized_daily_pnl: null,
+  remaining: null,
+  progress: null,
+  target_reached: null,
+  target_changed_during_day: false,
+  days_completed: [],
+  replay: { ...REPLAY_IDLE, mode: "daily_target" },
+};
+
+/**
+ * A stepped day that has not met its target: 10000 start, +30.00 realized against a
+ * $50.00 goal, so remaining is 20.00 and progress 60%.
+ */
+export const DAILY_TARGET_MEASURED: DailyTargetResponse = {
+  mode: "daily_target",
+  daily_target_amount: 50.0,
+  target_note: DAILY_TARGET_NOTE,
+  waiting_note: DAILY_WAITING_NOTE,
+  overshoot_note: DAILY_OVERSHOOT_NOTE,
+  overshoot_possible: true,
+  current_date: "2024-01-03",
+  day_starting_balance: 10000.0,
+  realized_daily_pnl: 30.0,
+  remaining: 20.0,
+  progress: 0.6,
+  target_reached: false,
+  target_changed_during_day: false,
+  days_completed: [],
+  replay: { ...REPLAY_STEPPED, mode: "daily_target" },
+};
+
+/**
+ * A day that overshot its target: realized 62.40 against a 50.00 target.
+ *
+ * `progress` is 1.248 — deliberately over 1, because realized P&L moves in whole
+ * trades and pretending otherwise would understate the mode's defining behaviour. The
+ * panel must show this figure uncapped even though it caps the bar's width.
+ */
+/**
+ * A day that overshot its target: realized 62.40 against a $50.00 goal.
+ *
+ * `progress` is 1.248 — deliberately over 1, because realized P&L moves in whole
+ * trades and pretending otherwise would understate the mode's defining behaviour. The
+ * panel must show this figure uncapped even though it caps the bar's width, and
+ * `remaining` must read 0.00 rather than -12.40.
+ *
+ * Day 2's `target_amount` is **50.00**, not 50.26: the configured dollar target does not
+ * scale with the balance. That single field is the clearest regression guard for the
+ * whole Phase 24C correction.
+ */
+export const DAILY_TARGET_OVERSHOOT: DailyTargetResponse = {
+  mode: "daily_target",
+  daily_target_amount: 50.0,
+  target_note: DAILY_TARGET_NOTE,
+  waiting_note: DAILY_WAITING_NOTE,
+  overshoot_note: DAILY_OVERSHOOT_NOTE,
+  overshoot_possible: true,
+  current_date: "2024-01-04",
+  day_starting_balance: 10000.0,
+  realized_daily_pnl: 62.4,
+  remaining: 0.0,
+  progress: 1.248,
+  target_reached: true,
+  target_changed_during_day: false,
+  days_completed: [
+    {
+      date: "2024-01-01",
+      starting_balance: 10000.0,
+      realized_pnl: 51.2,
+      target_amount: 50.0,
+      remaining: 0.0,
+      reached: true,
+      trades_closed: 2,
+    },
+    {
+      date: "2024-01-02",
+      starting_balance: 10051.2,
+      realized_pnl: -8.4,
+      target_amount: 50.0,
+      remaining: 58.4,
+      reached: false,
+      trades_closed: 1,
+    },
+  ],
+  replay: { ...REPLAY_STEPPED, mode: "daily_target", status: "paused" },
+};
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -430,7 +564,17 @@ export function modeNamed(name: string): ModeInfo {
   return found;
 }
 
-export type RecordedRequest = { method: string; url: string };
+/**
+ * One recorded request.
+ *
+ * `body` is the raw request body, present because `POST /api/daily-target/config` is
+ * the only route that sends one. Empty string for a bodyless request.
+ */
+export type RecordedRequest = {
+  method: string;
+  url: string;
+  body: string;
+};
 
 export interface StubRoute {
   /** Substring or RegExp matched against the request URL. */
@@ -462,10 +606,13 @@ export interface StubRoute {
 export function makeApi(routes: readonly StubRoute[] = []) {
   const requests: RecordedRequest[] = [];
 
-  const fetchImpl = (async (input: RequestInfo | URL) => {
+  const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
-    const method = "GET";
-    requests.push({ method, url });
+    // Recorded rather than assumed, because Phase 24C introduced the first request
+    // with a body. Hard-coding "GET" here would silently mis-record a POST and make
+    // every method assertion in the suite vacuous.
+    const method = init?.method ?? "GET";
+    requests.push({ method, url, body: String(init?.body ?? "") });
 
     // **Last** matching route wins, not the first.
     //
@@ -514,6 +661,8 @@ export function makeApi(routes: readonly StubRoute[] = []) {
     fetchImpl,
     /** URLs requested so far. */
     urls: () => requests.map((entry) => entry.url),
+    /** Every recorded request, including method and body. */
+    recorded: () => requests.slice(),
   };
 }
 

@@ -16,7 +16,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .session import AccountState, ExecutionIdentity, SessionView, StrategyIdentity
 
@@ -1023,4 +1023,238 @@ class ReplayStateResponse(_Strict):
                 if signal is not None
                 else None
             ),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Phase 24B/24C. Daily Target
+# ---------------------------------------------------------------------------
+
+
+class DailyTargetConfigRequest(_Strict):
+    """The body of ``POST /api/daily-target/config``.
+
+    Deliberately one field. The product contract is "I want to make N dollars today",
+    so the request expresses exactly that and nothing about percentage, basis or
+    compounding - every one of which was a way of making the target depend on the
+    account balance rather than on the user's decision.
+
+    Validation lives in :class:`~crypto_paper_lab.daily_target.DailyTargetConfig`,
+    not here, for one reason: the engine must reject a bad target whether it arrives
+    over HTTP or from Python. A transport-only check would leave
+    ``DailyTargetTracker.set_target`` callable with nonsense by any other caller, and
+    the route would then be validating something the engine had already accepted.
+
+    The bounds declared here are therefore only what Pydantic must enforce to produce
+    a typed ``NaN``/``infinity`` payload at all; the substantive limits (finite,
+    ``> 0``, at most :data:`~crypto_paper_lab.daily_target.MAX_TARGET_AMOUNT`) are
+    asserted by the engine and surface as a 422 carrying the engine's own wording.
+    """
+
+    target_amount: float = Field(
+        description="The daily objective in dollars of realized paper P&L. Must be "
+                    "finite and greater than 0. Rejected, never clamped."
+    )
+
+    @field_validator("target_amount", mode="before")
+    @classmethod
+    def _reject_non_numeric(cls, value: object) -> object:
+        """Refuse a ``bool`` before Pydantic coerces it.
+
+        Python's ``bool`` is a subclass of ``int``, so Pydantic turns ``true`` into
+        ``1.0`` and the mode would quietly accept a **$1.00** target that the client
+        never asked for. A target is a price; accepting a type that means "yes" for it
+        is exactly the silent coercion this contract refuses to do anywhere else, so
+        it is rejected at the edge.
+
+        Numbers are passed through untouched - including a float ``nan`` or
+        ``inf``, which the engine then rejects with its own wording.
+        """
+
+        if isinstance(value, bool):
+            raise ValueError(
+                "target_amount must be a number of dollars, not a boolean"
+            )
+
+        return value
+
+
+class DailyResultModel(_Strict):
+    """One finalized UTC day's outcome.
+
+    Present so the day history is a record a client can render, not a claim. Every
+    figure is broker-owned or config-derived; the transport computes none of them.
+    """
+
+    date: str = Field(description="The UTC calendar date this day covered.")
+    starting_balance: float = Field(
+        description="Equity when the day opened: the carried paper cash, never a "
+                    "reset to the mode's opening figure."
+    )
+    realized_pnl: float = Field(
+        description="Realized paper P&L for the day, after costs. Never includes an "
+                    "unrealized amount."
+    )
+    target_amount: float = Field(
+        description="The dollar objective that applied ON THIS DAY. Recorded per day "
+                    "because the user may change the target mid-run, so a past day is "
+                    "reported against the target it was actually measured against."
+    )
+    remaining: float = Field(
+        description="max(target_amount - realized_pnl, 0) for this day. Never "
+                    "negative."
+    )
+    reached: bool
+    trades_closed: int = Field(ge=0)
+
+    @classmethod
+    def from_result(cls, result) -> "DailyResultModel":
+        """A straight projection of an engine-owned finalized day.
+
+        Every field comes from :meth:`DailyResult.identity`, including ``remaining``:
+        the arithmetic is done once in the engine, when the day is recorded, so this
+        cannot drift from the live figure.
+        """
+
+        return cls(**result.identity())
+
+
+class DailyTargetResponse(_Strict):
+    """Daily Target's authoritative daily state. A projection, nothing more.
+
+    **It computes nothing.** Every figure is read from the engine's
+    :class:`~crypto_paper_lab.daily_target.DailyTargetTracker` and its
+    ``PaperBroker``. No score, no quantity, no exit, no P&L and no mark-to-market
+    value is derived here; the engine has no live price feed, so an unrealized figure
+    is not merely omitted but unrepresentable.
+
+    ``state`` is ``None`` before the replay's first step, and so is everything derived
+    from it. That is the Phase 16 convention - *None* means *not available*, never
+    zero - and it is why no field below is defaulted to a number that would read as a
+    measured value the engine has not produced.
+    """
+
+    mode: Literal["daily_target"] = "daily_target"
+
+    daily_target_amount: float = Field(
+        gt=0,
+        description="Today's objective in DOLLARS of realized paper P&L. A fixed "
+                    "amount the user chose, independent of the account balance and "
+                    "unchanged across UTC day boundaries. This is the contract: there "
+                    "is no target percentage, and the $10,000 demo balance does not "
+                    "determine it."
+    )
+
+    target_note: str = Field(
+        description="The non-guarantee statement, reused verbatim from the engine so "
+                    "the API and the UI cannot drift into different claims."
+    )
+
+    waiting_note: str = Field(
+        description="States that the target is an objective rather than a signal, so "
+                    "a client cannot imply the mode trades to reach it."
+    )
+
+    overshoot_note: str = Field(
+        description="Why the target may be exceeded: realized P&L moves in whole "
+                    "trades."
+    )
+
+    overshoot_possible: bool = Field(
+        description="Always true. Present so a client cannot present the target as a "
+                    "precise threshold without the response saying otherwise."
+    )
+
+    current_date: str | None = Field(
+        default=None,
+        description="The UTC calendar day being tracked, or null before the first "
+                    "step.",
+    )
+    day_starting_balance: float | None = Field(
+        default=None,
+        description="Equity when the current day opened: the carried paper cash.",
+    )
+    realized_daily_pnl: float | None = Field(
+        default=None,
+        description="Realized paper P&L for the current day, after costs. Never "
+                    "unrealized.",
+    )
+    remaining: float | None = Field(
+        default=None,
+        description="max(daily_target_amount - realized_daily_pnl, 0). Never "
+                    "negative. Null before the first step.",
+    )
+    progress: float | None = Field(
+        default=None,
+        description="realized_daily_pnl / daily_target_amount. May exceed 1.0 when a "
+                    "trade overshoots. Null before the first step.",
+    )
+    target_reached: bool | None = Field(
+        default=None,
+        description="Whether today's realized P&L has reached target_amount. False "
+                    "before any close, because nothing has been realized yet.",
+    )
+
+    target_changed_during_day: bool = Field(
+        default=False,
+        description="True when the user changed the target while this day was open, so "
+                    "a client can say the figure is a mix of two objectives rather "
+                    "than silently reporting one of them.",
+    )
+
+    days_completed: list[DailyResultModel] = Field(
+        default_factory=list,
+        description="Finalized UTC days in chronological order. The current day is "
+                    "never included.",
+    )
+
+    replay: ReplayStateResponse = Field(
+        description="The shared replay state: cursor, status, identities. The daily "
+                    "account is above; the paper broker figures are Standard's own "
+                    "endpoints, unchanged."
+    )
+
+    @classmethod
+    def from_session(cls, session, state, replay_state) -> "DailyTargetResponse":
+        """Build from a :class:`~paper_api.moderegistry.DailyTargetSession`.
+
+        ``state`` is the tracker's projection, passed in rather than recomputed: a
+        transport that re-derived progress from a balance would be a second
+        accounting implementation, which is exactly what Phase 17G ruled out for
+        scoring.
+        """
+
+        from crypto_paper_lab.daily_target import (
+            OVERSHOOT_NOTE,
+            TARGET_NOTE,
+            WAITING_NOTE,
+        )
+
+        return cls(
+            # Read from the configuration, not from ``state``: the target is a user
+            # setting and must be reportable on an idle replay that has never stepped,
+            # so a user can see and change the goal before trading begins.
+            daily_target_amount=session.daily_config.target_amount,
+            target_note=TARGET_NOTE,
+            waiting_note=WAITING_NOTE,
+            overshoot_note=OVERSHOOT_NOTE,
+            overshoot_possible=True,
+            target_changed_during_day=session.daily_target_changed_during_day,
+            current_date=(
+                state.current_date.isoformat() if state is not None else None
+            ),
+            day_starting_balance=(
+                state.day_starting_balance if state is not None else None
+            ),
+            realized_daily_pnl=(
+                state.realized_daily_pnl if state is not None else None
+            ),
+            remaining=(state.remaining if state is not None else None),
+            progress=(state.progress if state is not None else None),
+            target_reached=(state.target_reached if state is not None else None),
+            days_completed=[
+                DailyResultModel.from_result(result)
+                for result in (state.days_completed if state is not None else ())
+            ],
+            replay=ReplayStateResponse.from_state(replay_state, mode="daily_target"),
         )

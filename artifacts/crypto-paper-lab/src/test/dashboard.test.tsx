@@ -23,6 +23,9 @@ import {
   ACCOUNT,
   AI_STATE,
   AI_STATE_IDLE,
+  DAILY_TARGET_MEASURED,
+  DAILY_TARGET_NOTE,
+  DAILY_WAITING_NOTE,
   HEALTH,
   MARKET,
   MODES,
@@ -258,7 +261,10 @@ describe("dashboard: Alerts is brokerless in practice", () => {
 });
 
 describe("dashboard: reserved modes issue no execution request", () => {
-  for (const mode of ["daily_target", "manual", "high_risk"]) {
+  // `daily_target` was removed from this list in Phase 24B, when the mode became
+  // executable. It is now covered by the Daily Target describe block below, which
+  // asserts the opposite: selecting it *does* issue its own mode's requests.
+  for (const mode of ["manual", "high_risk"]) {
     it(`selecting ${mode} shows the server's note and requests no replay`, async () => {
       const { stub } = renderDashboard();
 
@@ -277,6 +283,179 @@ describe("dashboard: reserved modes issue no execution request", () => {
     await screen.findByText("Unavailable");
 
     expect(document.body.textContent).toContain(modeNamed("manual").note);
+  });
+});
+
+describe("dashboard: Daily Target", () => {
+  // Daily Target owns a separate paper broker, and the Phase 16 projections
+  // (`/api/account`, `/api/trades`, `/api/statistics`) carry no `mode` parameter -
+  // they describe Standard. Requesting them here would either be wasted or, worse,
+  // present Standard's account as this mode's.
+  const dailyRoutes: StubRoute[] = [
+    ...happyRoutes(),
+    { match: "/api/daily-target/config", body: DAILY_TARGET_MEASURED },
+    { match: "/api/daily-target", body: DAILY_TARGET_MEASURED },
+  ];
+
+  it("reads its replay and its own daily route", async () => {
+    const { stub } = renderDashboard(dailyRoutes);
+
+    await selectMode("daily_target");
+    await screen.findByTestId("daily-target-body");
+
+    const urls = stub.urls();
+
+    expect(urls.some((u) => u.includes("mode=daily_target"))).toBe(true);
+    expect(urls.some((u) => u.includes("/api/daily-target"))).toBe(true);
+  });
+
+  it("does not request Standard's projections", async () => {
+    const { stub } = renderDashboard(dailyRoutes);
+
+    // The dashboard opens on Standard, which legitimately requests those routes. Only
+    // what is requested *after* the switch is this test's subject.
+    await waitForUsableControls();
+    const seenBefore = stub.urls().length;
+
+    await selectMode("daily_target");
+    await screen.findByTestId("daily-target-body");
+
+    const afterSwitch = stub.urls().slice(seenBefore);
+
+    expect(afterSwitch.some((u) => u.includes("/api/account"))).toBe(false);
+    expect(afterSwitch.some((u) => u.includes("/api/trades"))).toBe(false);
+    expect(afterSwitch.some((u) => u.includes("/api/statistics"))).toBe(false);
+    // And not the AI book either - one mode's panels at a time.
+    expect(afterSwitch.some((u) => u.includes("/api/ai"))).toBe(false);
+  });
+
+  it("keeps the lifecycle controls, because it is a controllable mode", async () => {
+    renderDashboard(dailyRoutes);
+
+    await selectMode("daily_target");
+    await waitForUsableControls();
+
+    expect(screen.getByTestId("control-start")).toBeTruthy();
+    expect(screen.getByTestId("control-step")).toBeTruthy();
+    expect(screen.getByTestId("control-reset")).toBeTruthy();
+  });
+
+  it("steps against its own mode and refreshes its own daily projection", async () => {
+    // The regression this pins: the refresh keys were an `isAi ? ... : ...` ternary,
+    // so Daily Target fell into the Standard branch. Its replay would have updated
+    // while the daily panel beside it stayed on the previous day's figures.
+    const { stub } = renderDashboard(dailyRoutes);
+
+    await selectMode("daily_target");
+    await waitForUsableControls();
+
+    const dailyBefore = stub
+      .urls()
+      .filter((u) => u.includes("/api/daily-target")).length;
+
+    fireEvent.click(screen.getByTestId("control-step"));
+    fireEvent.click(screen.getByTestId("control-step"));
+
+    await waitFor(() =>
+      expect(
+        stub.urls().some((u) => u.includes("/api/replay/step?mode=daily_target")),
+      ).toBe(true),
+    );
+    await waitFor(() =>
+      expect(
+        stub.urls().filter((u) => u.includes("/api/daily-target")).length,
+      ).toBeGreaterThan(dailyBefore),
+    );
+  });
+
+  it("renders the engine's figures and its non-guarantee wording", async () => {
+    renderDashboard(dailyRoutes);
+
+    await selectMode("daily_target");
+    await screen.findByTestId("daily-target-body");
+
+    await waitFor(() =>
+      expect(screen.getByTestId("daily-target-progress").textContent).toContain(
+        "60.00%",
+      ),
+    );
+
+    expect(document.body.textContent).toContain(DAILY_TARGET_NOTE);
+    expect(document.body.textContent).toContain(DAILY_WAITING_NOTE);
+    // Not restated from Standard's account anywhere on the page.
+    expect(document.body.textContent).not.toContain(ACCOUNT.balance.toFixed(2));
+  });
+
+  it("presents the target as a dollar amount the user can change", async () => {
+    renderDashboard(dailyRoutes);
+
+    await selectMode("daily_target");
+    await screen.findByTestId("daily-target-input");
+
+    const input = screen.getByTestId(
+      "daily-target-input",
+    ) as HTMLInputElement;
+
+    // A dollar figure, pre-filled from the server. The Phase 24B percentage target is
+    // gone, and nothing on the page describes the goal as a fraction of the balance.
+    expect(input.value).toBe("50.00");
+    expect(document.body.textContent).not.toContain("target_pct");
+    expect(document.body.textContent).not.toContain(
+      "of the day's starting equity",
+    );
+  });
+
+  it("posts the chosen target to the configuration route", async () => {
+    const { stub } = renderDashboard(dailyRoutes);
+
+    await selectMode("daily_target");
+    await screen.findByTestId("daily-target-input");
+
+    fireEvent.change(screen.getByTestId("daily-target-input"), {
+      target: { value: "100" },
+    });
+    fireEvent.click(screen.getByTestId("daily-target-set"));
+
+    // The amount must reach the server as a body, and it must be the number typed.
+    await waitFor(() =>
+      expect(
+        stub.recorded().some(
+          (r) =>
+            r.method === "POST" &&
+            r.url.includes("/api/daily-target/config") &&
+            r.body.includes('"target_amount":100'),
+        ),
+      ).toBe(true),
+    );
+  });
+
+  it("sets the target without stepping the replay", async () => {
+    const { stub } = renderDashboard(dailyRoutes);
+
+    await selectMode("daily_target");
+    await screen.findByTestId("daily-target-input");
+
+    const stepsBefore = stub
+      .recorded()
+      .filter((r) => r.url.includes("/api/replay/step")).length;
+
+    fireEvent.change(screen.getByTestId("daily-target-input"), {
+      target: { value: "75" },
+    });
+    fireEvent.click(screen.getByTestId("daily-target-set"));
+
+    await waitFor(() =>
+      expect(
+        stub.recorded().some((r) =>
+          r.url.includes("/api/daily-target/config"),
+        ),
+      ).toBe(true),
+    );
+
+    // A target is a setting, not a step: it must not advance the cursor.
+    expect(
+      stub.recorded().filter((r) => r.url.includes("/api/replay/step")).length,
+    ).toBe(stepsBefore);
   });
 });
 

@@ -174,8 +174,10 @@ def test_only_the_permitted_routes_exist(client: TestClient) -> None:
     ``/api/market``; 16D added ``/api/signal``; 16E added ``/api/account``,
     ``/api/position`` and ``/api/trades``; 16F added ``/api/statistics``.
     Phase 17D added the five ``/api/replay`` control routes; 17F added
-    ``/api/modes``; 17G added ``/api/ai``. Any further route must be a conscious
-    decision with its own tests, not a by-product.
+    ``/api/modes``; 17G added ``/api/ai``. Phase 24B added
+    ``/api/daily-target``; Phase 24C added ``/api/daily-target/config`` so the user can
+    choose the dollar target. Any further route must be a conscious decision with its own
+    tests, not a by-product.
     """
 
     paths = {
@@ -196,6 +198,8 @@ def test_only_the_permitted_routes_exist(client: TestClient) -> None:
         "/api/replay",
         "/api/modes",
         "/api/ai",
+        "/api/daily-target",
+        "/api/daily-target/config",
         "/api/replay/start",
         "/api/replay/pause",
         "/api/replay/step",
@@ -333,6 +337,10 @@ ALLOWED_ENGINE_IMPORTS = {
                      # state. Phase 17G added it because AI permits several
                      # concurrent positions and PaperBroker holds exactly one;
                      # Standard's broker and baseline are untouched
+    "daily_target", # Phase 24B. DailyTargetConfig/Tracker/Policy - the day
+                     # bookkeeping and the single entry refusal. It holds no broker
+                     # and no prices, and Daily Target reuses `replay` and `simulator`
+                     # unchanged rather than importing a second executor
 }
 
 

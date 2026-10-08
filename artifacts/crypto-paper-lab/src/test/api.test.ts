@@ -445,14 +445,41 @@ describe("mode capability predicates", () => {
     expect(isControllableMode(alerts)).toBe(false);
   });
 
-  it("treats the three reserved modes as neither", () => {
-    for (const name of ["daily_target", "manual", "high_risk"]) {
+  // `daily_target` left this group in Phase 24B, when it became executable. It is now
+  // asserted to be controllable in its own right, so the reservation predicates stay
+  // pinned to the two modes that are genuinely still reserved.
+  it("treats the remaining reserved modes as neither", () => {
+    for (const name of ["manual", "high_risk"]) {
       const mode = MODES.modes.find((m) => m.mode === name)!;
 
       expect(mode.available).toBe(false);
       expect(isControllableMode(mode)).toBe(false);
       expect(isObservationOnlyMode(mode)).toBe(false);
     }
+  });
+
+  it("describes daily_target's objective in dollars, never as a percentage", () => {
+    // Phase 24C replaced a `target_pct` with a `target_amount`. A surviving percentage
+    // here would mean the API still advertises the fractional objective.
+    const daily = MODES.modes.find((m) => m.mode === "daily_target")!;
+
+    expect(daily.policy).not.toBeNull();
+    expect(daily.policy).not.toHaveProperty("target_pct");
+    expect(daily.note).not.toContain("%");
+  });
+
+  it("treats daily_target as controllable", () => {
+    const daily = MODES.modes.find((m) => m.mode === "daily_target")!;
+
+    expect(daily.available).toBe(true);
+    expect(isControllableMode(daily)).toBe(true);
+    // It trades, so it is neither observation-only nor reserved.
+    expect(isObservationOnlyMode(daily)).toBe(false);
+    expect(daily.supports_execution).toBe(true);
+    // The policy advertises its default objective in dollars, and no percentage.
+    expect(daily.policy?.target_amount).toBe(50);
+    expect("target_pct" in (daily.policy ?? {})).toBe(false);
+    expect(daily.policy?.max_positions).toBe(1);
   });
 });
 

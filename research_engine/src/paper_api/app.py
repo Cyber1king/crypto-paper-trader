@@ -48,6 +48,7 @@ from crypto_paper_lab.replay import (
     STATE_FINISHED,
 )
 from crypto_paper_lab.modes import (
+    DAILY_TARGET,
     DEFAULT_MODE,
     ModeError,
     ModeSpec,
@@ -64,6 +65,8 @@ from .schemas import (
     AiStateResponse,
     CandleModel,
     CostTotalsModel,
+    DailyTargetConfigRequest,
+    DailyTargetResponse,
     ExecutionIdentityModel,
     MarketMetadataModel,
     MarketResponse,
@@ -546,6 +549,151 @@ def create_app(
         """
 
         return AiStateResponse.from_ai(mode_registry.ai_session())
+
+    @app.get(
+        "/api/daily-target",
+        response_model=DailyTargetResponse,
+        tags=["replay"],
+    )
+    def daily_target_state(
+        mode: str | None = Query(
+            default=None,
+            description="Paper mode. Must be 'daily_target'; this route serves "
+                        "that mode only. Omitting it is equivalent to naming it, "
+                        "because this route is mode-specific.",
+        ),
+    ) -> DailyTargetResponse:
+        """Daily Target's authoritative daily state. Read-only (Phase 24B).
+
+        A projection of two authoritative objects and nothing else:
+        ``DailyTargetTracker`` for the day, the target and the day history, and the
+        mode's replay for the cursor and lifecycle. The mode's paper account, open
+        position, journal and statistics are **Standard's own endpoints**, unchanged,
+        because Daily Target reuses ``Replay`` and ``PaperBroker`` rather than
+        owning a second executor.
+
+        **It computes nothing.** No target is derived here, no progress is measured
+        here and no P&L is calculated here. If this route computed progress from a
+        balance, there would be a second accounting implementation that could
+        disagree with the tracker that decided when to stop trading.
+
+        Every *day* field is ``None`` before the replay's first step, because there
+        is no UTC day and no day-opening balance yet. That is the Phase 16 convention:
+        *None* means *not available*, never zero.
+
+        ``daily_target_amount`` is the exception and is deliberately **never** null. The
+        target is a fixed figure the user chose, not a value derived from a day-opening
+        balance, so it is known before the replay has run. That is what lets a user see
+        and change the goal on an idle session, and it is the practical difference
+        between a user-entered dollar target and the Phase 24B percentage, which could
+        not be reported at all until a bar had been processed.
+
+        The response carries ``target_note``, ``waiting_note`` and ``overshoot_note`` so
+        the client receives the non-guarantee wording **from the engine** rather than
+        inventing its own. A target cannot be presented as a precise threshold or a
+        promised return, and this is the field that makes that structural rather than a
+        convention a UI could forget.
+
+        ``waiting_note`` matters most of the three. "Daily target" otherwise reads as an
+        instruction to trade until a number is hit, and the response must be able to
+        state plainly that the strategy waits for valid signals instead.
+
+        The ``mode`` parameter is validated rather than ignored, so requesting this
+        route for another mode fails loudly with the standard refusal instead of
+        silently describing Daily Target.
+
+        Omitting ``mode`` means *this mode*, not Standard. That differs from
+        ``/api/replay``, where the default is Standard because that route serves every
+        mode. Here there is only one mode, so a mode-specific default is what lets a
+        client call ``GET /api/daily-target`` without repeating the name it already
+        asked for.
+        """
+
+        name = DAILY_TARGET if mode is None else mode
+
+        if name != DAILY_TARGET:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "INVALID_MODE",
+                    "message": (
+                        f"/api/daily-target serves {DAILY_TARGET!r} only; "
+                        f"requested {name!r}"
+                    ),
+                },
+            )
+
+        session = mode_registry.daily_target_session()
+
+        return DailyTargetResponse.from_session(
+            session, session.daily_state, session.snapshot()
+        )
+
+    @app.post(
+        "/api/daily-target/config",
+        response_model=DailyTargetResponse,
+        tags=["replay"],
+    )
+    def configure_daily_target(
+        payload: DailyTargetConfigRequest,
+        mode: str | None = Query(
+            default=None,
+            description="Paper mode. Must be 'daily_target'; this route serves "
+                        "that mode only. Omitting it is equivalent to naming it, "
+                        "because this route is mode-specific.",
+        ),
+    ) -> DailyTargetResponse:
+        """Set today's dollar target. The smallest configuration contract (Phase 24C).
+
+        The body is ``{"target_amount": 50.0}`` and the response is the **same shape as
+        ``GET /api/daily-target``**, so a client sets the target and renders the result
+        from one payload and cannot accidentally draw "before" and "after" from two
+        different contracts.
+
+        What this changes, and only this: the objective used from the next entry
+        decision onward. It does **not** touch realized P&L, the day's starting
+        balance, the cursor, the journal, the history or any open position. Lowering the
+        target to at or below today's realized P&L marks the day reached, which is the
+        arithmetic of the new goal rather than a side effect - see
+        :meth:`~crypto_paper_lab.daily_target.DailyTargetTracker.set_target`.
+
+        ``ValueError`` from the tracker's validation becomes a **422**
+        ``VALIDATION_ERROR`` carrying the engine's own reason. Non-finite (``NaN``,
+        ``infinity``), zero, negative and absurdly large amounts are all **rejected**,
+        never clamped: a silently trimmed target would show the user a number they did
+        not ask for, and the mode would then look broken for a whole UTC day.
+        """
+
+        name = DAILY_TARGET if mode is None else mode
+
+        if name != DAILY_TARGET:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "INVALID_MODE",
+                    "message": (
+                        f"/api/daily-target/config serves {DAILY_TARGET!r} only; "
+                        f"requested {name!r}"
+                    ),
+                },
+            )
+
+        session = mode_registry.daily_target_session()
+
+        try:
+            session.set_daily_target(payload.target_amount)
+        except ValueError as error:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "VALIDATION_ERROR",
+                    "message": str(error),
+                },
+            ) from error
+
+        return DailyTargetResponse.from_session(
+            session, session.daily_state, session.snapshot()
+        )
 
     @app.get("/api/replay", response_model=ReplayStateResponse, tags=["replay"])
     def replay_state(

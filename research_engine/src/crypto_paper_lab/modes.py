@@ -98,17 +98,32 @@ Reserved modes
 --------------
 
 Phase 17A names four product modes: Daily Target, Manual, High-Risk Paper and
-Alerts. Three of those - ``daily_target``, ``manual``, ``high_risk`` - are still
-*recognised* and *refused* after Phase 17G. Phase 17G defines the Standard, AI
-Intelligence and Alerts contracts; it does **not** define these three, and the
-architecture is explicit that it should not: High-Risk qualification rules are
-recorded as open question Q6 and must be pre-registered as research before they
-are implemented, and Daily Target and Manual each have unresolved contract
-questions of their own (Q4, Q5). Inventing contracts for them here would smuggle
-untested strategy variants into a UI phase, which is the outcome Q6 warns about.
+Alerts. Phase 17G defined the Standard, AI Intelligence and Alerts contracts and
+deliberately left the other two reserved, because their contract questions were open.
 
-Reserving the names means a typo cannot create a silent new mode, and requesting
-one fails explicitly instead of falling back to Standard.
+**Phase 24B implements Daily Target.** It was the one reserved mode whose contract the
+architecture had already specified in full (section 10) and whose open questions, Q4
+and Q5, both *judgement calls about presentation and measurement* rather than
+research, have since been answered:
+
+* **Q4** - measured on **realized** paper P&L only, and an open position is **not**
+  closed on target. Force-closing would be a trading operation and would change the
+  very figure being measured.
+* **Q5** - the target **may be overshot** and the mode says so. Realized P&L moves in
+  whole trades, and the mechanism that would prevent it is a new exit rule, which is a
+  research change.
+
+Daily Target is the one mode that reuses Standard's executor unchanged: it permits
+one position, so ``Replay`` and ``PaperBroker`` already satisfy it and no second
+execution engine was written. Its entire contract is one entry refusal, expressed as
+:class:`~crypto_paper_lab.daily_target.DailyTargetPolicy`. The day bookkeeping lives in
+:mod:`crypto_paper_lab.daily_target` and holds no broker.
+
+``manual`` and ``high_risk`` remain reserved. High-Risk qualification rules are open
+question Q6 and must be pre-registered as research before they are implemented;
+Manual has no contract at all, since "the operator decides" is not an automatic
+policy. Reserving their names means a typo cannot create a silent new mode, and
+requesting one fails explicitly instead of falling back to Standard.
 """
 from __future__ import annotations
 
@@ -119,6 +134,13 @@ from .ai_paper import (
     DEFAULT_ALLOCATION_FRACTION,
     DEFAULT_MAX_POSITIONS,
     DEFAULT_PROFIT_TARGET_PCT,
+)
+from .daily_target import (
+    DAILY_TARGET_POLICY,
+    DEFAULT_TARGET_AMOUNT,
+    MODE_LABEL as DAILY_TARGET_LABEL,
+    TARGET_NOTE,
+    WAITING_NOTE,
 )
 from .execution import (
     AUTOMATIC_POLICY,
@@ -132,16 +154,21 @@ __all__ = [
     "AI_INTELLIGENCE",
     "AI_INTELLIGENCE_POLICY",
     "ALERTS",
+    "DAILY_TARGET",
+    "DAILY_TARGET_POLICY",
     "DEFAULT_ALLOCATION_FRACTION",
     "DEFAULT_MAX_POSITIONS",
     "DEFAULT_MODE",
     "DEFAULT_PROFIT_TARGET_PCT",
+    "DEFAULT_TARGET_AMOUNT",
     "DEFAULT_THRESHOLD",
     "MODES",
     "ModeError",
     "ModeNotAvailableError",
     "ModeSpec",
+    "TARGET_NOTE",
     "UnknownModeError",
+    "WAITING_NOTE",
     "is_executable",
     "known_modes",
     "mode_policy",
@@ -163,9 +190,12 @@ AI_INTELLIGENCE = "ai_intelligence"
 #: Notification-only. Holds no broker, by Phase 17A §12.1.
 ALERTS = "alerts"
 
-#: Names Phase 17A defined for later phases. Reserved here so they cannot be
-#: invented by accident and so requesting one fails loudly.
-RESERVED_DAILY_TARGET = "daily_target"
+#: Trades each UTC day until the day's realized paper P&L target is met (Phase 24B).
+#: Implemented: see :mod:`crypto_paper_lab.daily_target`.
+DAILY_TARGET = "daily_target"
+
+#: Names Phase 17A defined for later phases, still unbuilt. Reserved here so they
+#: cannot be invented by accident and so requesting one fails loudly.
 RESERVED_MANUAL = "manual"
 RESERVED_HIGH_RISK = "high_risk"
 
@@ -294,12 +324,23 @@ MODES: Mapping[str, ModeSpec] = {
             policy=None,
         ),
         ModeSpec(
-            mode=RESERVED_DAILY_TARGET,
-            label="Daily Target",
+            mode=DAILY_TARGET,
+            # The mode's own label carries "Paper Trading", so the name never appears
+            # without the word that says what it is.
+            label=DAILY_TARGET_LABEL,
             supports_execution=True,
-            available=False,
-            note="Reserved. The mode contract is defined in Phase 17G.",
-            policy=DisabledPolicy(name="reserved_daily_target"),
+            available=True,
+            note=(
+                "Aim for a fixed dollar amount of realized paper profit per UTC day, "
+                "set by you and unchanged as the balance moves. Runs the frozen "
+                "strategy and stops opening new positions once the day's realized "
+                "P&L reaches it. One paper position, sized from paper cash with no "
+                "credit facility. The target is a paper-trading objective, not a "
+                "guaranteed return; the strategy waits for valid signals rather than "
+                "trading to reach it, and realized P&L moves in whole trades so the "
+                "target can be overshot."
+            ),
+            policy=DAILY_TARGET_POLICY,
         ),
         ModeSpec(
             mode=RESERVED_MANUAL,

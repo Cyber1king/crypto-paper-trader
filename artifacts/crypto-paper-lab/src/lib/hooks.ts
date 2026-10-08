@@ -42,6 +42,7 @@ import {
   isApiError,
   type AccountResponse,
   type AiState,
+  type DailyTargetResponse,
   type ApiError,
   type HealthResponse,
   type MarketQuery,
@@ -61,6 +62,7 @@ export const queryKeys = {
   modes: () => ["modes"] as const,
   replay: (mode: string | undefined) => ["replay", mode ?? "standard"] as const,
   ai: () => ["ai"] as const,
+  dailyTarget: () => ["daily-target"] as const,
   account: () => ["account"] as const,
   trades: () => ["trades"] as const,
   statistics: () => ["statistics"] as const,
@@ -154,6 +156,76 @@ export function useAiState(
     enabled,
     retry: false,
   });
+}
+
+/**
+ * Daily Target's authoritative daily state (Phase 24B).
+ *
+ * Separate from {@link useReplayState} for the same reason `useAiState` is: the daily
+ * contract is not part of `ReplayStateResponse`, and widening that response would make
+ * every mode carry fields that are false for all of them.
+ *
+ * `enabled` is supplied by the caller rather than derived from the mode here, matching
+ * {@link useAiState}, so this hook holds no opinion about which mode is selected.
+ *
+ * `refetchInterval` is **not** set. While the replay is auto-running the Phase 20
+ * interval is already invalidating the replay key on every tick, and this projection
+ * has to agree with it; a second independent interval would be a second refresh
+ * cadence for one mode's state, which is the kind of drift this layer exists to
+ * prevent. The daily figures are refreshed through the `alsoRefresh` keys on the
+ * lifecycle mutations instead.
+ */
+export function useDailyTargetState(
+  enabled: boolean,
+): UseQueryResult<DailyTargetResponse, ApiError> {
+  const api = usePaperApi();
+
+  return useQuery({
+    queryKey: queryKeys.dailyTarget(),
+    queryFn: ({ signal }) => api.getDailyTarget(signal),
+    enabled,
+    retry: false,
+  });
+}
+
+/** What {@link useDailyTargetConfig} exposes. */
+export interface DailyTargetConfigControl {
+  /**
+   * Set today's dollar target. Resolves to the server's own daily projection.
+   *
+   * The mutation is **not** auto-applied on success: `setQueryData` writes the
+   * response because the server returns the authoritative projection, which is already
+   * the state the UI should render. No refetch follows.
+   *
+   * Failures are typed and surfaced verbatim, so a rejected target shows the engine's
+   * reason ("must be greater than 0") rather than a generic message. Nothing is
+   * clamped locally, because a silently altered target is the one outcome a user
+   * choosing a number cannot detect.
+   */
+  readonly apply: UseMutationResult<DailyTargetResponse, ApiError, number>;
+  /** True while the request is in flight, so the control can disable itself. */
+  readonly pending: boolean;
+}
+
+/**
+ * The mutation behind the target control.
+ *
+ * Separate from the replay lifecycle on purpose: a target change is a **setting**, not
+ * a step. It must not advance the cursor, and it must be refusable for reasons that
+ * have nothing to do with whether a position is open.
+ */
+export function useDailyTargetConfig(): DailyTargetConfigControl {
+  const api = usePaperApi();
+  const queryClient = useQueryClient();
+
+  const apply = useMutation<DailyTargetResponse, ApiError, number>({
+    mutationFn: (targetAmount: number) => api.setDailyTarget(targetAmount),
+    onSuccess: (state) => {
+      queryClient.setQueryData(queryKeys.dailyTarget(), state);
+    },
+  });
+
+  return { apply, pending: apply.isPending };
 }
 
 // ---------------------------------------------------------------------------

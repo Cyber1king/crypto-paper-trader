@@ -25,6 +25,9 @@
  *   for lifecycle. The two are shown in separate panels and never merged.
  * - Alerts: `/api/modes` only. No replay request is issued, because the mode has no
  *   session and the server would refuse it.
+ * - Daily Target: `/api/replay?mode=daily_target` for lifecycle, plus
+ *   `/api/daily-target` for the day's figures. Kept separate for the same reason AI's
+ *   is: the daily contract is not part of `ReplayStateResponse`.
  * - Reserved modes: `/api/modes` only. The server's note is shown; no execution is
  *   attempted and no substitute is chosen.
  */
@@ -53,6 +56,7 @@ import {
   IntelligenceScorePanel,
 } from "@/components/ai-panels";
 import { AlertsPanel } from "@/components/alerts-panel";
+import { DailyTargetPanel } from "@/components/daily-target-panels";
 
 import {
   describeError,
@@ -68,6 +72,8 @@ import {
   queryError,
   useAiState,
   useAutoStep,
+  useDailyTargetConfig,
+  useDailyTargetState,
   useHealth,
   useMarket,
   useModes,
@@ -97,11 +103,20 @@ export function Dashboard() {
   const isControllable = Boolean(mode?.available && mode.supports_execution);
   const isAi = mode?.mode === "ai_intelligence";
   const isAlerts = mode?.mode === "alerts";
+  const isDailyTarget = mode?.mode === "daily_target";
 
   // Alerts and reserved modes issue no replay request at all.
   const replay = useReplayState(isControllable ? mode : undefined);
 
   const ai = useAiState(isAi);
+
+  // Daily Target's daily contract, like AI's, is not part of ReplayStateResponse and
+  // so is read from its own route rather than by widening the shared one.
+  const daily = useDailyTargetState(isDailyTarget);
+
+  // The target editor's mutation. Created unconditionally so the hook order is stable
+  // across mode switches; it only fires when Daily Target is selected.
+  const dailyConfig = useDailyTargetConfig();
 
   const account = useStandardAccount(mode?.mode === "standard");
   const trades = useTrades(mode?.mode === "standard");
@@ -125,24 +140,44 @@ export function Dashboard() {
 
   useRunningPolling(replayStatus);
 
+  /**
+   * What a lifecycle call must refresh beyond the replay itself.
+   *
+   * `ReplayState` is authoritative for the replay, but it carries no mode-specific
+   * book, so each mode's own projection has to be invalidated explicitly.
+   *
+   * Computed once and shared by the auto-step and the controls. These two used to
+   * repeat the same ternary inline, which is how the Daily Target branch would have
+   * been added to one and forgotten in the other — leaving the daily panel stale after
+   * every step while the replay beside it updated. One list, two consumers.
+   *
+   * The branches are mutually exclusive and each names only its own mode's queries:
+   * the Phase 16 projections are Standard-scoped (`/api/account` has no `mode`
+   * parameter), and each mode owns a separate broker, so invalidating Standard's keys
+   * while Daily Target is selected would refresh figures belonging to a different
+   * account.
+   */
+  const refreshKeys = useMemo<readonly (readonly unknown[])[]>(
+    () =>
+      isAi
+        ? [queryKeys.ai()]
+        : isDailyTarget
+          ? [queryKeys.dailyTarget()]
+          : [queryKeys.account(), queryKeys.trades(), queryKeys.statistics()],
+    [isAi, isDailyTarget],
+  );
+
   // Advance the engine while it reports `running`. The server sets the flag on Start
   // and runs no worker, so without this the replay would hold its cursor and the UI
   // would look frozen while claiming to be running (Phase 20).
   useAutoStep({
     mode: isControllable ? mode : undefined,
     status: replayStatus,
-    alsoRefresh: isAi
-      ? [queryKeys.ai()]
-      : [queryKeys.account(), queryKeys.trades(), queryKeys.statistics()],
+    alsoRefresh: refreshKeys,
   });
 
   const controls = useReplayControls(isControllable ? mode : undefined, {
-    // The replay response is authoritative for the replay itself, but it does not
-    // contain AI's book, the account projection or the journal, so those are
-    // refreshed explicitly.
-    alsoRefresh: isAi
-      ? [queryKeys.ai()]
-      : [queryKeys.account(), queryKeys.trades(), queryKeys.statistics()],
+    alsoRefresh: refreshKeys,
   });
 
   const refusal = useMemo(
@@ -180,6 +215,7 @@ export function Dashboard() {
   const serviceError = firstError(health, modes);
   const replayError = queryError(replay);
   const aiError = queryError(ai);
+  const dailyError = queryError(daily);
   const marketError = queryError(market);
 
   // `shrink-0` on every badge: each is `whitespace-nowrap inline-flex`, so as a flex
@@ -318,6 +354,26 @@ export function Dashboard() {
             controlsEnabled={Boolean(mode?.available && mode.supports_execution)}
             modeLabel={mode?.label ?? "AI Intelligence"}
             status={ai.data?.replay.status}
+            busy={controls.busy}
+            stepCount={stepCount}
+            onStepCountChange={setStepCount}
+            onStart={() => controls.start.mutate(undefined)}
+            onPause={() => controls.pause.mutate()}
+            onStep={handleStep}
+            onReset={handleReset}
+          />
+        ) : isDailyTarget ? (
+          <DailyTargetBody
+            daily={daily.data}
+            isLoading={daily.isLoading}
+            error={dailyError}
+            onSetTarget={(amount) => dailyConfig.apply.mutate(amount)}
+            isSetting={dailyConfig.pending}
+            setError={dailyConfig.apply.error ?? null}
+            refusal={refusal}
+            controlsEnabled={Boolean(mode?.available && mode.supports_execution)}
+            modeLabel={mode?.label ?? "Daily Target"}
+            status={replay.data?.status}
             busy={controls.busy}
             stepCount={stepCount}
             onStepCountChange={setStepCount}
@@ -572,6 +628,95 @@ function AiBody({
           </div>
         </>
       )}
+    </div>
+  );
+}
+
+/**
+ * Daily Target's body.
+ *
+ * ## Why the shared controls, and not their own
+ *
+ * Daily Target is a controllable mode with exactly the same lifecycle as Standard and
+ * AI: start, pause, step, reset against `/api/replay?mode=daily_target`. Its defining
+ * behaviour lives entirely inside the engine's policy, so the dashboard needs no new
+ * affordance for it — in particular there is **no** "stop at target" button, because
+ * stopping is the engine's decision and offering a control for it would imply the
+ * client could make it.
+ *
+ * That is also why the daily figures are not pushed into `PaperControls` or merged
+ * into the Standard account panel: the mode's broker *is* the shared one, and two
+ * components rendering the same balance two different ways is exactly the drift this
+ * layout exists to prevent.
+ *
+ * The panel's own disclaimer and target editor sit below the controls rather than above
+ * them, so the first thing a reader meets is the caveat, not the number.
+ *
+ * `onSetTarget` / `isSetting` / `setError` come from the dashboard's
+ * `useDailyTargetConfig` mutation. It is passed in rather than created here so this
+ * function stays a pure layout, and so the target control is driven by the same
+ * mutation in tests as in the page.
+ */
+function DailyTargetBody({
+  daily,
+  isLoading,
+  error,
+  onSetTarget,
+  isSetting,
+  setError,
+  refusal,
+  controlsEnabled,
+  modeLabel,
+  status,
+  busy,
+  stepCount,
+  onStepCountChange,
+  onStart,
+  onPause,
+  onStep,
+  onReset,
+}: {
+  daily: Parameters<typeof DailyTargetPanel>[0]["daily"];
+  isLoading: boolean;
+  error: ApiError | null;
+  onSetTarget: Parameters<typeof DailyTargetPanel>[0]["onSetTarget"];
+  isSetting: boolean;
+  setError: ApiError | null;
+} & ControlsProps) {
+  return (
+    <div className="flex flex-col gap-6">
+      <div className="border border-border rounded-lg px-4 py-3 bg-card">
+        <PaperControls
+          status={status}
+          modeLabel={modeLabel}
+          busy={busy}
+          disabled={!controlsEnabled}
+          onStart={onStart}
+          onPause={onPause}
+          onStep={onStep}
+          onReset={onReset}
+          refusal={refusal}
+          stepCount={stepCount}
+          onStepCountChange={onStepCountChange}
+        />
+        <p className="text-[11px] text-muted-foreground mt-3 border-l-2 border-primary/40 pl-3 leading-relaxed">
+          These controls drive the daily mode&apos;s replay through the shared
+          transport (<code className="font-mono">?mode=daily_target</code>). The day,
+          target and realized P&amp;L below come from{" "}
+          <code className="font-mono">GET /api/daily-target</code>, and the target is
+          set through <code className="font-mono">POST /api/daily-target/config</code> —
+          nothing is computed here.
+        </p>
+      </div>
+
+      <DailyTargetPanel
+        daily={daily}
+        isLoading={isLoading}
+        error={error}
+        onSetTarget={onSetTarget}
+        isSetting={isSetting}
+        setError={setError}
+      />
     </div>
   );
 }
