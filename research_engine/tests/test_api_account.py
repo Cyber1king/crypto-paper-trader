@@ -528,8 +528,8 @@ def test_no_order_or_execution_surface(closed_trades_client: TestClient) -> None
     for path in (
         "/orders", "/api/order", "/api/execute",
         "/api/position/close", "/api/position/open",
-        "/api/alerts", "/api/daily", "/api/manual", "/api/high-risk",
-    ):
+"/api/alerts", "/api/daily", "/api/high-risk",
+   ):
         assert closed_trades_client.get(path).status_code == 404, path
 
 

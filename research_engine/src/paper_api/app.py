@@ -50,6 +50,7 @@ from crypto_paper_lab.replay import (
 from crypto_paper_lab.modes import (
     DAILY_TARGET,
     DEFAULT_MODE,
+    MANUAL,
     ModeError,
     ModeSpec,
     mode_spec,
@@ -68,6 +69,8 @@ from .schemas import (
     DailyTargetConfigRequest,
     DailyTargetResponse,
     ExecutionIdentityModel,
+    ManualActionRequest,
+    ManualStateResponse,
     MarketMetadataModel,
     MarketResponse,
     ModeInfoModel,
@@ -694,6 +697,130 @@ def create_app(
         return DailyTargetResponse.from_session(
             session, session.daily_state, session.snapshot()
         )
+
+    def _manual_session(mode: str | None):
+        """Resolve Manual's session, refusing any other mode.
+
+        Repeated across the three Manual routes on purpose. It is four lines, and
+        duplicating it means each route's guard is visible where the route is read
+        rather than hidden behind a helper whose behaviour a reader has to look up.
+        """
+
+        name = MANUAL if mode is None else mode
+
+        if name != MANUAL:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "INVALID_MODE",
+                    "message": (
+                        f"/api/manual serves {MANUAL!r} only; requested {name!r}"
+                    ),
+                },
+            )
+
+        return mode_registry.manual_session()
+
+    @app.get("/api/manual", response_model=ManualStateResponse, tags=["manual"])
+    def manual_state(
+        mode: str | None = Query(
+            default=None,
+            description="Paper mode. Must be 'manual'; this route serves that mode "
+                        "only. Omitting it is equivalent to naming it, because this "
+                        "route is mode-specific.",
+        ),
+    ) -> ManualStateResponse:
+        """Manual's authoritative paper state. Read-only (Phase 25B).
+
+        A projection of :class:`~crypto_paper_lab.simulator.PaperBroker` and the mode's
+        own pending intent, and **nothing else**. No fill is derived here, no notional
+        is estimated here and no P&L is recomputed here.
+
+        ``execution_price_preview`` is the next execution candle's open, and it is a
+        **preview**: a pending action would fill there if the replay stepped now, and
+        the realised fill is whatever the broker books. ``preview_note`` is served from
+        the engine so a client cannot drop the caveat, which is the one thing that
+        would let this number read as a quote.
+
+        ``available_actions`` is derived from live state rather than hard-coded, so the
+        UI cannot be offered a button the engine would refuse.
+
+        Manual state appears **only** here. ``/api/account``, ``/api/position``,
+        ``/api/trades`` and ``/api/statistics`` keep describing Standard, and no field
+        of this response leaks onto ``/api/ai`` or ``ReplayStateResponse``.
+        """
+
+        return ManualStateResponse.from_session(_manual_session(mode))
+
+    @app.post(
+        "/api/manual/action", response_model=ManualStateResponse, tags=["manual"]
+    )
+    def manual_action(
+        payload: ManualActionRequest,
+        mode: str | None = Query(
+            default=None,
+            description="Paper mode. Must be 'manual'; this route serves that mode "
+                        "only. Omitting it is equivalent to naming it, because this "
+                        "route is mode-specific.",
+        ),
+    ) -> ManualStateResponse:
+        """Request a paper action. The action is an **intent**, not a fill (Phase 25B).
+
+        ``{"action": "ENTER_LONG", "size_pct": 0.25}`` records the request and returns
+        immediately. **Nothing fills here**, because the price does not exist yet: the
+        fill is the *next* execution candle's open, reached only when the replay steps.
+
+        That is the causality boundary and it is deliberate. On the frozen data the
+        cursor-22 execution bar opens at 43,679.70 while the last bar the user has seen
+        closed at 43,679.80, so a fill price is genuinely unknowable at request time.
+        Filling immediately would mean using a price the replay had not reached.
+
+        Refusals are the engine's own and arrive with the engine's wording:
+
+        ==============================  ======  =================================
+        ``REPLAY_FINISHED``            409     the dataset is exhausted
+        ``NO_NEXT_CANDLE``             409     no bar left to fill against
+        ``POSITION_ALREADY_OPEN``      409     exit the open position first
+        ``NO_POSITION_OPEN``           409     nothing to exit
+        ``UNSUPPORTED_REVERSAL``       409     exit, then enter the other side
+        ``NO_PAPER_CASH``              409     cash is zero or below
+        ``VALIDATION_ERROR``           422     unknown action or unusable size
+        ==============================  ======  =================================
+
+        A refusal mutates nothing: every check runs before the intent is stored.
+        """
+
+        session = _manual_session(mode)
+
+        session.request(payload.action, payload.size_pct)
+
+        return ManualStateResponse.from_session(session)
+
+    @app.post(
+        "/api/manual/cancel", response_model=ManualStateResponse, tags=["manual"]
+    )
+    def manual_cancel(
+        mode: str | None = Query(
+            default=None,
+            description="Paper mode. Must be 'manual'; this route serves that mode "
+                        "only. Omitting it is equivalent to naming it, because this "
+                        "route is mode-specific.",
+        ),
+    ) -> ManualStateResponse:
+        """Discard the pending action, if any.
+
+        An action has **no automatic expiry**, so a request made while the replay sat
+        idle would otherwise survive indefinitely. Cancellation is the user's way out.
+
+        Idempotent by design: cancelling with nothing pending is not an error, because a
+        cancel button that can fail is a worse control than no cancel button.
+        """
+
+        session = _manual_session(mode)
+
+        session.cancel()
+
+        return ManualStateResponse.from_session(session)
 
     @app.get("/api/replay", response_model=ReplayStateResponse, tags=["replay"])
     def replay_state(

@@ -449,13 +449,25 @@ describe("mode capability predicates", () => {
   // asserted to be controllable in its own right, so the reservation predicates stay
   // pinned to the two modes that are genuinely still reserved.
   it("treats the remaining reserved modes as neither", () => {
-    for (const name of ["manual", "high_risk"]) {
+    // `manual` left this group in Phase 25B, when it became executable. The
+    // reservation predicates are now pinned to the one mode still reserved.
+    for (const name of ["high_risk"]) {
       const mode = MODES.modes.find((m) => m.mode === name)!;
 
       expect(mode.available).toBe(false);
       expect(isControllableMode(mode)).toBe(false);
       expect(isObservationOnlyMode(mode)).toBe(false);
     }
+  });
+
+  it("treats manual as controllable", () => {
+    const manual = MODES.modes.find((m) => m.mode === "manual")!;
+
+    expect(manual.available).toBe(true);
+    expect(isControllableMode(manual)).toBe(true);
+    expect(isObservationOnlyMode(manual)).toBe(false);
+    expect(manual.policy).toEqual({ name: "manual", max_positions: 1 });
+    expect(manual.label).toContain("Paper Trading");
   });
 
   it("describes daily_target's objective in dollars, never as a percentage", () => {

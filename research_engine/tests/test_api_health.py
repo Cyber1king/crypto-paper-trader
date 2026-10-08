@@ -176,8 +176,10 @@ def test_only_the_permitted_routes_exist(client: TestClient) -> None:
     Phase 17D added the five ``/api/replay`` control routes; 17F added
     ``/api/modes``; 17G added ``/api/ai``. Phase 24B added
     ``/api/daily-target``; Phase 24C added ``/api/daily-target/config`` so the user can
-    choose the dollar target. Any further route must be a conscious decision with its own
-    tests, not a by-product.
+    choose the dollar target. Phase 25B added the three Manual routes - ``/api/manual``,
+    ``/api/manual/action`` and ``/api/manual/cancel`` - so a user can request a paper
+    action and cancel one that has not filled. Any further route must be a conscious
+    decision with its own tests, not a by-product.
     """
 
     paths = {
@@ -200,6 +202,9 @@ def test_only_the_permitted_routes_exist(client: TestClient) -> None:
         "/api/ai",
         "/api/daily-target",
         "/api/daily-target/config",
+        "/api/manual",
+        "/api/manual/action",
+        "/api/manual/cancel",
         "/api/replay/start",
         "/api/replay/pause",
         "/api/replay/step",
@@ -213,10 +218,9 @@ def test_only_the_permitted_routes_exist(client: TestClient) -> None:
         "/orders",
         "/api/order",
         "/api/execute",
-        "/api/alerts",
-        "/api/daily",
-        "/api/manual",
-        "/api/high-risk",
+"/api/alerts",
+   "/api/daily",
+   "/api/high-risk",
         "/api/equity",
         "/api/position/close",
         "/api/position/close-all",
@@ -257,6 +261,14 @@ def test_deferred_routes_do_not_exist(client: TestClient, path: str) -> None:
       ``/api/replay/step`` and ``/api/replay/reset`` routes every other mode uses,
       with ``?mode=ai_intelligence``. Separate verbs would be a second way to do
       one thing.
+
+    Phase 25B **removed** ``/api/manual`` from this list. It was deferred here because
+    Manual had no contract; it now has one, and ``/api/manual``, ``/api/manual/action``
+    and ``/api/manual/cancel`` are real routes with their own tests in
+    ``test_manual_paper.py``. What stays absent is a *reversal* route: Manual answers
+    ``409 UNSUPPORTED_REVERSAL`` rather than offering an atomic exit-then-entry, because
+    two fills inside one broker call would charge a full round of costs on a trade the
+    user never chose to close.
     """
 
     assert client.get(path).status_code == 404
@@ -333,10 +345,14 @@ ALLOWED_ENGINE_IMPORTS = {
                      # book stays AI's single owner
     "intelligence", # IntelligenceScore - the deterministic 0-100 qualification
                      # score. Phase 17G reads it to report; it never recomputes it
-    "ai_paper",     # AiPaperBook - the SOLE owner of AI capital and position
-                     # state. Phase 17G added it because AI permits several
-                     # concurrent positions and PaperBroker holds exactly one;
-                     # Standard's broker and baseline are untouched
+"ai_paper",     # AiPaperBook - the SOLE owner of AI capital and position
+                       # state. Phase 17G added it because AI permits several
+                       # concurrent positions and PaperBroker holds exactly one;
+                       # Standard's broker and baseline are untouched
+    "manual_paper",  # ManualPolicy - Phase 25B. The seam for a mode that refuses
+                       # BOTH an entry and an exit, so every trade in Manual is the
+                       # user's. The session reads it to build the mode's replay, and
+                       # no other engine module imports it
     "daily_target", # Phase 24B. DailyTargetConfig/Tracker/Policy - the day
                      # bookkeeping and the single entry refusal. It holds no broker
                      # and no prices, and Daily Target reuses `replay` and `simulator`

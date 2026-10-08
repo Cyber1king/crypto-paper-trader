@@ -475,6 +475,114 @@ export interface DailyTargetConfigRequest {
   readonly target_amount: number;
 }
 
+// ---------------------------------------------------------------------------
+// Manual (Phase 25B)
+// ---------------------------------------------------------------------------
+
+/** The actions Manual accepts. `HOLD` is the absence of one and has no endpoint. */
+export type ManualAction = "ENTER_LONG" | "ENTER_SHORT" | "EXIT";
+
+/** An action waiting for a bar. */
+export interface ManualIntent {
+  readonly action: ManualAction;
+  /** Fraction of paper cash, for an entry. Absent for an exit. */
+  readonly size_pct: number | null;
+}
+
+/**
+ * Manual's open paper position.
+ *
+ * The strategy instrumentation fields are present because they are part of the engine's
+ * trade, and they are `null` for a manual entry — a user's decision has no signal behind
+ * it, so the engine produced no trend state or breakout distance to record.
+ */
+export interface ManualPosition {
+  readonly side: "long" | "short";
+  readonly entry_time: string;
+  readonly entry_price: number;
+  readonly raw_entry_price: number | null;
+  readonly quantity: number;
+  readonly reason: string;
+  readonly signal_close: number | null;
+  readonly trend_state: string | null;
+  readonly breakout_distance: number | null;
+  readonly retest_distance: number | null;
+  readonly realised_volatility: number | null;
+  readonly mean_range: number | null;
+  readonly support_at_entry: number | null;
+  readonly resistance_at_entry: number | null;
+}
+
+/** One closed manual paper trade. */
+export interface ManualTrade {
+  readonly side: "long" | "short";
+  readonly entry_time: string;
+  readonly entry_price: number;
+  readonly exit_time: string | null;
+  readonly exit_price: number | null;
+  readonly raw_entry_price: number | null;
+  readonly raw_exit_price: number | null;
+  readonly quantity: number;
+  readonly reason: string;
+  /** `manual` for a user exit. Never one of the engine's own rule labels. */
+  readonly exit_reason: string;
+  readonly bars_held: number;
+  readonly pnl: number | null;
+  readonly costs: number;
+  readonly net_pnl: number | null;
+  readonly fee_total: number;
+  readonly slippage_total: number;
+  readonly spread_total: number;
+  readonly total_friction: number | null;
+}
+
+/**
+ * Manual's authoritative paper state.
+ *
+ * ## An action is an intent, not a fill
+ *
+ * `pending_action` is a request the engine has recorded but not filled. It fills at the
+ * **next** execution candle's open when the replay steps, because that price does not
+ * exist until then. `execution_price_preview` is that bar's open — and
+ * `preview_note` says, in the engine's own words, that it is not a fill price.
+ *
+ * ## No computed money value
+ *
+ * Every figure is read from the engine's broker. `paper_cash` is not equity: the engine
+ * values no open position, so there is no unrealized figure to show.
+ *
+ * ## Served only from `/api/manual`
+ *
+ * Nothing on this interface appears on `/api/account`, `/api/position`, `/api/trades`,
+ * `/api/statistics` or `/api/ai`, which keep describing Standard.
+ */
+export interface ManualStateResponse {
+  readonly mode: "manual";
+  /** The paper-only statement, verbatim from the engine. */
+  readonly note: string;
+  /** Actions permitted right now, derived from state. Empty when none are. */
+  readonly available_actions: readonly ManualAction[];
+  readonly pending_action: ManualIntent | null;
+  /** Set when a pending action was replaced or dropped, so nothing is swallowed. */
+  readonly paper_note: string | null;
+  readonly paper_cash: number;
+  readonly starting_balance: number;
+  readonly realized_pnl: number;
+  readonly trade_count: number;
+  readonly open_position: ManualPosition | null;
+  /** Bars the open position has been held. Null when flat. */
+  readonly bars_held: number | null;
+  /** Closed trades, newest first. */
+  readonly journal: readonly ManualTrade[];
+  readonly execution_price_preview: number | null;
+  readonly execution_bar_timestamp: string | null;
+  /** Largest fraction of cash this session accepts. Requests are refused, not clamped. */
+  readonly max_size_pct: number;
+  /** The wording a UI must show beside the preview. */
+  readonly preview_note: string;
+  readonly replay: ReplayState;
+}
+
 /** Engine error codes the UI handles by name rather than by status alone. */
 export type ApiErrorCode =
   | "NETWORK_UNAVAILABLE"
@@ -487,6 +595,12 @@ export type ApiErrorCode =
   | "INSUFFICIENT_HISTORY"
   | "INVALID_TRANSITION"
   | "VALIDATION_ERROR"
+  // -- Manual (Phase 25B). Refusals from POST /api/manual/action.
+  | "NO_NEXT_CANDLE"
+  | "POSITION_ALREADY_OPEN"
+  | "NO_POSITION_OPEN"
+  | "UNSUPPORTED_REVERSAL"
+  | "NO_PAPER_CASH"
   | "NOT_FOUND"
   | "HTTP_ERROR";
 
@@ -730,6 +844,56 @@ export class PaperApi {
       { mode: "daily_target" },
       signal,
       body,
+    );
+  }
+
+  // -- Manual --------------------------------------------------------------
+
+  /** Manual's authoritative paper state. */
+  async getManual(signal?: AbortSignal): Promise<ManualStateResponse> {
+    return this.request<ManualStateResponse>(
+      "GET",
+      "/api/manual",
+      { mode: "manual" },
+      signal,
+    );
+  }
+
+  /**
+   * Request a paper action.
+   *
+   * This **records an intent**; it does not fill anything. The engine fills it at the
+   * next execution candle's open when the replay steps, so the response's `pending_action`
+   * is non-null and `open_position` is unchanged.
+   *
+   * `sizePct` is sent exactly as typed. A target silently trimmed to something else is
+   * the one outcome a user choosing a number cannot detect, so an invalid value goes to
+   * the server and its 422 is surfaced instead.
+   */
+  async submitManualAction(
+    action: ManualAction,
+    sizePct?: number,
+    signal?: AbortSignal,
+  ): Promise<ManualStateResponse> {
+    return this.request<ManualStateResponse>(
+      "POST",
+      "/api/manual/action",
+      { mode: "manual" },
+      signal,
+      { action, ...(sizePct === undefined ? {} : { size_pct: sizePct }) },
+    );
+  }
+
+  /** Discard the pending action, if any. Idempotent. */
+  async cancelManualAction(
+    signal?: AbortSignal,
+  ): Promise<ManualStateResponse> {
+    return this.request<ManualStateResponse>(
+      "POST",
+      "/api/manual/cancel",
+      { mode: "manual" },
+      signal,
+      {},
     );
   }
 

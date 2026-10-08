@@ -44,6 +44,8 @@ import {
   type AiState,
   type DailyTargetResponse,
   type ApiError,
+  type ManualAction,
+  type ManualStateResponse,
   type HealthResponse,
   type MarketQuery,
   type MarketResponse,
@@ -63,6 +65,7 @@ export const queryKeys = {
   replay: (mode: string | undefined) => ["replay", mode ?? "standard"] as const,
   ai: () => ["ai"] as const,
   dailyTarget: () => ["daily-target"] as const,
+  manual: () => ["manual"] as const,
   account: () => ["account"] as const,
   trades: () => ["trades"] as const,
   statistics: () => ["statistics"] as const,
@@ -186,6 +189,80 @@ export function useDailyTargetState(
     enabled,
     retry: false,
   });
+}
+
+/**
+ * Manual's authoritative paper state (Phase 25B).
+ *
+ * Separate from {@link useReplayState} for the same reason the other two mode-specific
+ * hooks are: the manual contract is not part of `ReplayStateResponse`, and widening that
+ * response would make every mode carry fields that are false for all of them.
+ *
+ * `enabled` is supplied by the caller, matching {@link useAiState}.
+ */
+export function useManualState(
+  enabled: boolean,
+): UseQueryResult<ManualStateResponse, ApiError> {
+  const api = usePaperApi();
+
+  return useQuery({
+    queryKey: queryKeys.manual(),
+    queryFn: ({ signal }) => api.getManual(signal),
+    enabled,
+    retry: false,
+  });
+}
+
+/** What {@link useManualActions} exposes. */
+export interface ManualActionControl {
+  /**
+   * Request an action. Resolves to the server's own state.
+   *
+   * The response is written into the cache rather than followed by a refetch: the server
+   * answers with the authoritative projection, which is already what the UI should
+   * render.
+   */
+  readonly submit: UseMutationResult<
+    ManualStateResponse,
+    ApiError,
+    { action: ManualAction; sizePct?: number }
+  >;
+  /** Discard the pending action. */
+  readonly cancel: UseMutationResult<ManualStateResponse, ApiError, void>;
+  readonly busy: boolean;
+}
+
+/**
+ * The mutations behind Manual's controls.
+ *
+ * A **setting plus a pending intent**, not steps, so it is deliberately separate from
+ * {@link useReplayControls}: submitting an action must never advance the cursor, and
+ * cancelling one must never either.
+ */
+export function useManualActions(): ManualActionControl {
+  const api = usePaperApi();
+  const queryClient = useQueryClient();
+
+  const adopt = (state: ManualStateResponse) => {
+    queryClient.setQueryData(queryKeys.manual(), state);
+  };
+
+  const submit = useMutation<
+    ManualStateResponse,
+    ApiError,
+    { action: ManualAction; sizePct?: number }
+  >({
+    mutationFn: ({ action, sizePct }) =>
+      api.submitManualAction(action, sizePct),
+    onSuccess: adopt,
+  });
+
+  const cancel = useMutation<ManualStateResponse, ApiError, void>({
+    mutationFn: () => api.cancelManualAction(),
+    onSuccess: adopt,
+  });
+
+  return { submit, cancel, busy: submit.isPending || cancel.isPending };
 }
 
 /** What {@link useDailyTargetConfig} exposes. */

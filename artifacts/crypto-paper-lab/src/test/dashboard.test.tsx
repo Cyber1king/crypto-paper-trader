@@ -26,6 +26,9 @@ import {
   DAILY_TARGET_MEASURED,
   DAILY_TARGET_NOTE,
   DAILY_WAITING_NOTE,
+  MANUAL_FLAT,
+  MANUAL_PENDING,
+  MANUAL_PREVIEW_NOTE,
   HEALTH,
   MARKET,
   MODES,
@@ -261,10 +264,10 @@ describe("dashboard: Alerts is brokerless in practice", () => {
 });
 
 describe("dashboard: reserved modes issue no execution request", () => {
-  // `daily_target` was removed from this list in Phase 24B, when the mode became
-  // executable. It is now covered by the Daily Target describe block below, which
-  // asserts the opposite: selecting it *does* issue its own mode's requests.
-  for (const mode of ["manual", "high_risk"]) {
+  // `daily_target` was removed in Phase 24B and `manual` in Phase 25B, as each
+  // became executable. Both are now covered by their own describe blocks below, which
+  // assert the opposite: selecting one *does* issue its own mode's requests.
+  for (const mode of ["high_risk"]) {
     it(`selecting ${mode} shows the server's note and requests no replay`, async () => {
       const { stub } = renderDashboard();
 
@@ -279,10 +282,10 @@ describe("dashboard: reserved modes issue no execution request", () => {
   it("shows the API's note rather than a client-authored message", async () => {
     renderDashboard();
 
-    await selectMode("manual");
+    await selectMode("high_risk");
     await screen.findByText("Unavailable");
 
-    expect(document.body.textContent).toContain(modeNamed("manual").note);
+    expect(document.body.textContent).toContain(modeNamed("high_risk").note);
   });
 });
 
@@ -456,6 +459,106 @@ describe("dashboard: Daily Target", () => {
     expect(
       stub.recorded().filter((r) => r.url.includes("/api/replay/step")).length,
     ).toBe(stepsBefore);
+  });
+});
+
+describe("dashboard: Manual", () => {
+  // Manual owns a separate broker, and the Phase 16/17G projections have no `mode`
+  // parameter — they describe Standard. So the dashboard must request Manual's own
+  // route and none of the Standard ones while Manual is selected.
+  const manualRoutes: StubRoute[] = [
+    ...happyRoutes(),
+    { match: "/api/manual/action", body: MANUAL_PENDING },
+    { match: "/api/manual/cancel", body: MANUAL_FLAT },
+    { match: "/api/manual", body: MANUAL_FLAT },
+  ];
+
+  it("reads its replay and its own route", async () => {
+    const { stub } = renderDashboard(manualRoutes);
+
+    await selectMode("manual");
+    await screen.findByTestId("manual-body");
+
+    const urls = stub.urls();
+
+    expect(urls.some((u) => u.includes("mode=manual"))).toBe(true);
+    expect(urls.some((u) => u.includes("/api/manual"))).toBe(true);
+  });
+
+  it("does not request Standard's projections", async () => {
+    const { stub } = renderDashboard(manualRoutes);
+
+    await waitForUsableControls();
+    const seenBefore = stub.urls().length;
+
+    await selectMode("manual");
+    await screen.findByTestId("manual-body");
+
+    const afterSwitch = stub.urls().slice(seenBefore);
+
+    expect(afterSwitch.some((u) => u.includes("/api/account"))).toBe(false);
+    expect(afterSwitch.some((u) => u.includes("/api/trades"))).toBe(false);
+    expect(afterSwitch.some((u) => u.includes("/api/statistics"))).toBe(false);
+    expect(afterSwitch.some((u) => u.includes("/api/ai"))).toBe(false);
+    expect(afterSwitch.some((u) => u.includes("/api/daily-target"))).toBe(false);
+  });
+
+  it("presents the mode as paper trading with PAPER on every action", async () => {
+    renderDashboard(manualRoutes);
+
+    await selectMode("manual");
+    await screen.findByTestId("manual-body");
+
+    expect(document.body.textContent).toContain("paper");
+
+    for (const id of ["manual-buy", "manual-sell"]) {
+      expect(
+        screen.getByTestId(id).textContent?.toLowerCase(),
+      ).toContain("paper");
+    }
+  });
+
+  it("shows the execution preview with the engine's not-a-fill wording", async () => {
+    // The preview only appears once an action is pending, because before that there is
+    // nothing it would fill.
+    const { stub } = renderDashboard([
+      ...happyRoutes(),
+      { match: "/api/manual", body: MANUAL_PENDING },
+    ]);
+
+    await selectMode("manual");
+    await screen.findByTestId("manual-pending");
+
+    // The caveat is served by the engine so a client cannot drop it.
+    expect(screen.getByTestId("manual-preview-note").textContent).toBe(
+      MANUAL_PREVIEW_NOTE,
+    );
+    expect(stub).toBeDefined();
+  });
+
+  it("offers no auto-trade toggle, because nothing is automatic", async () => {
+    renderDashboard(manualRoutes);
+
+    await selectMode("manual");
+    await screen.findByTestId("manual-body");
+
+    for (const button of Array.from(document.querySelectorAll("button"))) {
+      const label = (button.textContent ?? "").toLowerCase();
+
+      expect(label).not.toContain("auto-trade");
+      expect(label).not.toContain("autotrade");
+    }
+  });
+
+  it("keeps the shared lifecycle controls", async () => {
+    renderDashboard(manualRoutes);
+
+    await selectMode("manual");
+    await waitForUsableControls();
+
+    expect(screen.getByTestId("control-start")).toBeTruthy();
+    expect(screen.getByTestId("control-step")).toBeTruthy();
+    expect(screen.getByTestId("control-reset")).toBeTruthy();
   });
 });
 

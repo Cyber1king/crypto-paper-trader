@@ -853,9 +853,9 @@ class TestIsolation:
         assert standard.snapshot().balance == balance_before
 
     def test_reserved_modes_remain_reserved(self) -> None:
-        assert "manual" in reserved_modes()
-        assert "high_risk" in reserved_modes()
-        assert mode_spec("manual").available is False
+        # ``manual`` left this group in Phase 25B, when it gained a contract. Only
+        # ``high_risk`` is still reserved, and its reservation is unchanged.
+        assert reserved_modes() == ("high_risk",)
         assert mode_spec("high_risk").available is False
         assert DAILY_TARGET not in reserved_modes()
 
@@ -1202,7 +1202,9 @@ class TestModeRegistration:
         assert mode_spec(STANDARD).available is True
         assert mode_spec(AI_INTELLIGENCE).available is True
         assert mode_spec(ALERTS).supports_execution is False
-        assert mode_spec("manual").available is False
+        # Manual became executable in Phase 25B and is no longer reserved; High-Risk
+        # still is. Neither is a change to Daily Target's own contract.
+        assert mode_spec("manual").available is True
         assert mode_spec("high_risk").available is False
 
     def test_the_policy_is_a_module_constant(self) -> None:

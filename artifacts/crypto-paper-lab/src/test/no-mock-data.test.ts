@@ -69,6 +69,7 @@ const LIVE_FILES = [
   "components/standard-panels.tsx",
   "components/ai-panels.tsx",
   "components/daily-target-panels.tsx",
+  "components/manual-panels.tsx",
   "components/alerts-panel.tsx",
   "components/market-chart.tsx",
   "pages/dashboard.tsx",

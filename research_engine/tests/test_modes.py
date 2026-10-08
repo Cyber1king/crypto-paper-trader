@@ -95,10 +95,14 @@ PREFIX = 400
 #: specified in architecture section 10 and its open questions Q4 and Q5 were
 #: measurement and presentation calls rather than research, so it became an
 #: implemented mode. ``ALERTS`` likewise stopped being reserved in 17G.
-RESERVED_FROM_ARCHITECTURE = ("manual", "high_risk")
+RESERVED_FROM_ARCHITECTURE = ("high_risk",)
 
 #: Modes the architecture named and that are now implemented and executable.
-IMPLEMENTED_FROM_ARCHITECTURE = ("daily_target",)
+#:
+#: ``daily_target`` joined this in Phase 24B/24C; ``manual`` in Phase 25B. Both left the
+#: reserved list rather than being renamed, because a mode that gains a contract keeps
+#: the identity it was reserved under.
+IMPLEMENTED_FROM_ARCHITECTURE = ("daily_target", "manual")
 
 
 def code_only(path: pathlib.Path) -> str:
@@ -291,7 +295,13 @@ class TestModeIdentities:
             assert isinstance(MODES[mode], ModeSpec)
 
     def test_the_modes_still_without_a_contract_are_reserved(self) -> None:
-        """``manual`` and ``high_risk`` stay reserved until they have contracts."""
+        """``high_risk`` stays reserved until it has a contract.
+
+        ``manual`` left this list in Phase 25B, the third time a reserved mode has
+        gained an implementation and moved to
+        :data:`IMPLEMENTED_FROM_ARCHITECTURE`. It keeps the identity it was reserved
+        under, so ``mode_spec("manual")`` still resolves - it is simply executable now.
+        """
 
         for mode in RESERVED_FROM_ARCHITECTURE:
             assert mode in reserved_modes(), mode
@@ -962,13 +972,14 @@ class TestTransport:
         assert response.json()["detail"]["code"] == "INVALID_MODE"
 
     def test_a_still_reserved_mode_is_rejected_with_409(self) -> None:
-        """``manual`` is the exemplar: named in 17A, still without a contract.
+        """``high_risk`` is the last mode named in 17A and still without a contract.
 
-        Was asserted against ``daily_target`` until Phase 24B implemented it. The
-        reservation property is unchanged - a recognised name with no contract is
-        refused with ``MODE_NOT_AVAILABLE``, not served as Standard and not reported
-        as unknown - so the test follows a mode that is still reserved rather than
-        tracking one that stopped being.
+        Was asserted against ``daily_target`` until Phase 24B implemented it, then
+        against ``manual`` until Phase 25B did the same. The reservation property is
+        unchanged - a recognised name with no contract is refused with
+        ``MODE_NOT_AVAILABLE``, not served as Standard and not reported as unknown - so
+        the test follows a mode that is still reserved rather than tracking one that
+        stopped being.
         """
 
         for mode in RESERVED_FROM_ARCHITECTURE:

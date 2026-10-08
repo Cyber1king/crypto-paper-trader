@@ -20,6 +20,8 @@ Ownership per mode::
       ├── standard        -> ReplaySession -> Replay     -> PaperBroker
       ├── ai_intelligence -> ReplaySession -> Replay     -> PaperBroker (position 1)
       │                                     AiPaperBook  -> PaperBroker (position N)
+      ├── daily_target    -> DailyTargetSession -> Replay -> PaperBroker
+      ├── manual          -> ManualSession   -> Replay   -> PaperBroker
       └── (alerts holds no session at all)
 
 Why AI needs a second object, and not a rewritten ``Replay``
@@ -58,6 +60,7 @@ from crypto_paper_lab.daily_target import (
 )
 from crypto_paper_lab.execution import IntelligencePolicy
 from crypto_paper_lab.intelligence import IntelligenceConfig
+from crypto_paper_lab.manual_paper import MANUAL_POLICY, ManualConfig
 from crypto_paper_lab.modes import (
     AI_INTELLIGENCE,
     ALERTS,
@@ -65,6 +68,7 @@ from crypto_paper_lab.modes import (
     DEFAULT_MAX_POSITIONS,
     DEFAULT_MODE,
     DEFAULT_THRESHOLD,
+    MANUAL,
     MODES,
     ModeNotAvailableError,
     ModeSpec,
@@ -74,6 +78,7 @@ from crypto_paper_lab.modes import (
 from crypto_paper_lab.replay import Replay, ReplayState, STATE_FINISHED
 from crypto_paper_lab.walkforward import baseline_config, phase13_costs
 
+from .manualsession import ManualSession
 from .marketdata import dataset_identity, load_research_candles
 from .replaysession import ReplaySession
 from .session import PaperSession
@@ -82,6 +87,8 @@ __all__ = [
     "ALERTS",
     "AiSession",
     "DailyTargetSession",
+    "MANUAL",
+    "ManualSession",
     "ModeRegistry",
 ]
 
@@ -607,6 +614,15 @@ class ModeRegistry:
 
         return mode_spec(mode).mode == DAILY_TARGET
 
+    def is_manual(self, mode: str) -> bool:
+        """Whether ``mode`` is served by :class:`ManualSession`.
+
+        As with :meth:`is_ai` and :meth:`is_daily_target`: the transport asks a
+        question rather than testing for a name, and an unknown mode still raises.
+        """
+
+        return mode_spec(mode).mode == MANUAL
+
     # -- sessions -----------------------------------------------------------
 
     def session(self, mode: str) -> ReplaySession:
@@ -675,6 +691,27 @@ class ModeRegistry:
                 f"mode {AI_INTELLIGENCE!r} requires an AiSession so its "
                 f"positions and capital have one owner; got "
                 f"{type(session).__name__}"
+            )
+
+        return session
+
+    def manual_session(self) -> "ManualSession":
+        """Manual's session.
+
+        Raises unless it really is a :class:`ManualSession`, for the same reason
+        :meth:`ai_session` and :meth:`daily_target_session` do: an injected builder
+        returning a plain session would leave the transport with no ``manual_state``
+        and no way to submit an action, and the failure would surface as an
+        ``AttributeError`` inside a route handler - a programming error dressed up as
+        a data problem.
+        """
+
+        session = self.session(MANUAL)
+
+        if not isinstance(session, ManualSession):
+            raise TypeError(
+                f"mode {MANUAL!r} requires a ManualSession so its pending action and "
+                f"paper state have one owner; got {type(session).__name__}"
             )
 
         return session
@@ -749,6 +786,38 @@ class ModeRegistry:
                     daily_target=lambda: tracker.reached_for(
                         session.replay.broker.cash
                     ),
+                )
+            )
+
+            return session
+
+        if self.is_manual(mode):
+            # Phase 25B. Manual needs the candle tuple twice: once to build the replay
+            # and once for the session to fill an action against the next execution
+            # bar, because ``Replay`` publishes no public accessor for that bar's price
+            # and reaching into its private series is the coupling this design refused.
+            #
+            # The tuple is the ``lru_cache``d one every mode already reads, and it is
+            # immutable, so handing the same object to both is shared *input* and not
+            # shared state. ``load_research_candles`` is not called twice here: the
+            # session is built first and given the tuple, then the replay is attached.
+            candles = load_research_candles()
+
+            session = ManualSession(
+                candles=tuple(candles),
+                config=ManualConfig(),
+            )
+            session.attach_replay(
+                Replay(
+                    candles,
+                    config=baseline_config(),
+                    costs=phase13_costs(),
+                    # ManualPolicy refuses both an entry and an exit, so this replay
+                    # trades nothing on its own and every trade in the mode is the
+                    # user's. See crypto_paper_lab.manual_paper for why
+                    # DisabledPolicy cannot be used instead.
+                    policy=MANUAL_POLICY,
+                    dataset_sha256=dataset_identity(),
                 )
             )
 

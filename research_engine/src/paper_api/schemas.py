@@ -1256,5 +1256,316 @@ class DailyTargetResponse(_Strict):
                 DailyResultModel.from_result(result)
                 for result in (state.days_completed if state is not None else ())
             ],
-            replay=ReplayStateResponse.from_state(replay_state, mode="daily_target"),
+replay=ReplayStateResponse.from_state(replay_state, mode="daily_target"),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Phase 25B. Manual
+# ---------------------------------------------------------------------------
+
+
+class ManualActionRequest(_Strict):
+    """The body of ``POST /api/manual/action``.
+
+    Two fields, and one of them conditional. ``size_pct`` is required for an entry and
+    **refused** for an exit: silently ignoring a size on an exit would hide a request
+    the user did not mean, which is the one thing a paper tool must not do.
+
+    It is a **fraction of cash**, not a quantity and not a notional. The engine derives
+    the quantity from its own fill price inside ``PaperBroker.open_from_signal``, so a
+    number the transport computed could disagree with the fill it was priced against.
+    Fraction in, engine-owned quantity out.
+
+    Substantive validation lives in
+    :func:`~crypto_paper_lab.manual_paper.coerce_size_pct`, for the same reason Daily
+    Target's does: the engine must reject a bad size whether it arrives over HTTP or
+    from Python.
+    """
+
+    action: str = Field(
+        description="One of ENTER_LONG, ENTER_SHORT, EXIT. Case-insensitive. HOLD is "
+                    "not an action and REVERSE is not supported."
+    )
+
+    size_pct: float | None = Field(
+        default=None,
+        description="Fraction of paper cash to commit, greater than 0 and at most 1. "
+                    "Required for an entry; rejected for an exit. Never clamped.",
+    )
+
+    @field_validator("size_pct", mode="before")
+    @classmethod
+    def _reject_non_numeric(cls, value: object) -> object:
+        """Refuse a ``bool`` and a non-number before Pydantic coerces them.
+
+        ``bool`` is an ``int`` subclass, so Pydantic turns ``true`` into ``1.0`` and the
+        mode would silently commit the **entire account** to a request that never
+        mentioned a size. That is the worst available failure for this field, so it is
+        refused at the edge rather than reaching the engine as a plausible-looking 1.0.
+        """
+
+        if isinstance(value, bool):
+            raise ValueError("size_pct must be a fraction, not a boolean")
+
+        return value
+
+
+class ManualIntentModel(_Strict):
+    """The action waiting for a bar, or the absence of one.
+
+    ``None`` is honest: there is no pending action, which is the ordinary state between
+    two user decisions. It is not defaulted to a placeholder action, which would render
+    a control the engine has no intention of filling.
+    """
+
+    action: str = Field(description="The requested action.")
+    size_pct: float | None = Field(
+        default=None, description="The requested fraction of cash, for an entry."
+    )
+
+    @classmethod
+    def from_intent(cls, intent) -> "ManualIntentModel":
+        return cls(action=intent.action, size_pct=intent.size_pct)
+
+
+class ManualPositionModel(_Strict):
+    """Manual's open paper position.
+
+    A projection of the engine's own ``PaperTrade``, so every figure here was computed
+    by :class:`~crypto_paper_lab.simulator.PaperBroker`. The strategy instrumentation
+    fields are present because they are part of the trade, and they are ``None`` for a
+    manual entry — there is no signal behind a user's decision, so recording a trend or
+    a breakout distance would be inventing data the engine never produced.
+    """
+
+    side: str = Field(description="long or short.")
+    entry_time: datetime = Field(description="When the position filled.")
+    entry_price: float = Field(description="Price actually paid, after fill costs.")
+    raw_entry_price: float | None = Field(
+        default=None,
+        description="Unadjusted reference price from the execution bar. Identical to "
+                    "entry_price under the cost_deduction execution model.",
+    )
+    quantity: float = Field(description="Units, derived by the broker.")
+    reason: str = Field(description="Why the position was opened.")
+
+    signal_close: float | None = None
+    trend_state: str | None = None
+    breakout_distance: float | None = None
+    retest_distance: float | None = None
+    realised_volatility: float | None = None
+    mean_range: float | None = None
+    support_at_entry: float | None = None
+    resistance_at_entry: float | None = None
+
+    @classmethod
+    def from_trade(cls, trade) -> "ManualPositionModel":
+        return cls(
+            side=trade.side,
+            entry_time=trade.entry_time,
+            entry_price=trade.entry_price,
+            raw_entry_price=trade.raw_entry_price,
+            quantity=trade.quantity,
+            reason=trade.reason,
+            signal_close=trade.signal_close,
+            trend_state=trade.trend_state,
+            breakout_distance=trade.breakout_distance,
+            retest_distance=trade.retest_distance,
+            realised_volatility=trade.realised_volatility,
+            mean_range=trade.mean_range,
+            support_at_entry=trade.support_at_entry,
+            resistance_at_entry=trade.resistance_at_entry,
+        )
+
+
+class ManualTradeModel(_Strict):
+    """One closed manual paper trade.
+
+    ``pnl``, ``costs`` and ``net_pnl`` are the broker's own properties, serialised as
+    values. The transport does not recompute them: a second implementation of the
+    engine's P&L definition is exactly the drift this project exists to prevent.
+    """
+
+    side: str
+    entry_time: datetime
+    entry_price: float
+    exit_time: datetime | None
+    exit_price: float | None
+    raw_entry_price: float | None = None
+    raw_exit_price: float | None = None
+    quantity: float
+    reason: str
+    exit_reason: str
+    bars_held: int = Field(ge=0)
+
+    pnl: float | None = Field(default=None, description="Gross P&L before costs.")
+    costs: float = Field(description="Fees plus slippage, as deducted.")
+    net_pnl: float | None = Field(
+        default=None, description="P&L after the deducted costs."
+    )
+    fee_total: float = 0.0
+    slippage_total: float = 0.0
+    spread_total: float = 0.0
+    total_friction: float | None = Field(
+        default=None, description="Fees plus spread plus slippage."
+    )
+
+    @classmethod
+    def from_trade(cls, trade) -> "ManualTradeModel":
+        return cls(
+            side=trade.side,
+            entry_time=trade.entry_time,
+            entry_price=trade.entry_price,
+            exit_time=trade.exit_time,
+            exit_price=trade.exit_price,
+            raw_entry_price=trade.raw_entry_price,
+            raw_exit_price=trade.raw_exit_price,
+            quantity=trade.quantity,
+            reason=trade.reason,
+            exit_reason=trade.exit_reason,
+            bars_held=trade.bars_held,
+            pnl=trade.pnl,
+            costs=trade.costs,
+            net_pnl=trade.net_pnl,
+            fee_total=trade.fee_total,
+            slippage_total=trade.slippage_total,
+            spread_total=trade.spread_total,
+            total_friction=trade.total_friction,
+        )
+
+
+class ManualStateResponse(_Strict):
+    """Manual's authoritative paper state. A projection, nothing more.
+
+    **It computes nothing.** Every figure is read from
+    :class:`~crypto_paper_lab.simulator.PaperBroker` or is the engine's own
+    ``cash - starting_balance``. No fill is derived here, no notional is estimated
+    here and no P&L is recomputed here; if this route computed any of them it would be a
+    second accounting truth that could disagree with the broker that decided when to
+    fill.
+
+    Served **only** from ``/api/manual``. Nothing on this model appears on
+    ``/api/account``, ``/api/position``, ``/api/trades``, ``/api/statistics`` or
+    ``/api/ai``, which keep describing Standard.
+    """
+
+    mode: Literal["manual"] = "manual"
+
+    note: str = Field(
+        description="The paper-only statement, reused verbatim from the engine so the "
+                    "API and the UI cannot drift into different claims."
+    )
+
+    #: Which actions the engine would accept right now, derived from state rather than
+    #: hard-coded, so the UI cannot offer a button that would be refused.
+    available_actions: list[str] = Field(
+        default_factory=list,
+        description="Action names currently permitted. Empty when the replay is "
+                    "finished, has no bar left, or has no cash to commit.",
+    )
+
+    pending_action: ManualIntentModel | None = Field(
+        default=None,
+        description="The action waiting for a bar, or null. An action is an INTENT: it "
+                    "fills at the next execution candle's open when the replay "
+                    "steps.",
+    )
+
+    paper_note: str | None = Field(
+        default=None,
+        description="Set when a pending action was replaced or dropped, so a request "
+                    "the user made is never swallowed silently.",
+    )
+
+    paper_cash: float = Field(
+        description="broker.cash. Not equity: the engine values no open position and "
+                    "reports no unrealized amount."
+    )
+    starting_balance: float
+    realized_pnl: float = Field(
+        description="cash - starting_balance, the engine's own definition."
+    )
+    trade_count: int = Field(ge=0)
+
+    open_position: ManualPositionModel | None = Field(
+        default=None, description="The open paper position, or null."
+    )
+
+    #: Bars the open position has been held. Null when flat.
+    bars_held: int | None = Field(
+        default=None,
+        ge=0,
+        description="cursor - the bar the position filled against. Computed by the "
+                    "session because the engine writes a trade's own bars_held only "
+                    "at close, where it reports 0 while the position is open.",
+    )
+
+    journal: list[ManualTradeModel] = Field(
+        default_factory=list, description="Closed manual trades, newest first."
+    )
+
+    execution_price_preview: float | None = Field(
+        default=None,
+        description="The next execution candle's OPEN. A PREVIEW and explicitly not a "
+                    "fill price: it is where a pending action would fill if the replay "
+                    "steps now, and the realised fill is the broker's own.",
+    )
+
+    execution_bar_timestamp: datetime | None = Field(
+        default=None, description="The timestamp of that execution candle."
+    )
+
+    max_size_pct: float = Field(
+        description="The largest fraction of cash this session will accept. Rejected "
+                    "requests are refused, never clamped to it."
+    )
+
+    preview_note: str = Field(
+        description="The wording a UI must show beside the preview, so the price can "
+                    "never be read as guaranteed."
+    )
+
+    replay: ReplayStateResponse = Field(
+        description="The shared replay state: cursor, status, identities."
+    )
+
+    @classmethod
+    def from_session(cls, session) -> "ManualStateResponse":
+        """Build from a :class:`~paper_api.manualsession.ManualSession`.
+
+        The session's own projection is passed through rather than recomputed here, for
+        the same reason ``DailyTargetResponse.from_session`` does: a transport that
+        re-derived progress would be a second accounting implementation.
+        """
+
+        from crypto_paper_lab.manual_paper import MANUAL_NOTE, PREVIEW_NOTE
+
+        state = session.manual_state()
+
+        return cls(
+            note=MANUAL_NOTE,
+            available_actions=list(state.available_actions),
+            pending_action=(
+                ManualIntentModel.from_intent(state.pending_action)
+                if state.pending_action is not None
+                else None
+            ),
+            paper_note=state.dropped_intent_reason,
+            paper_cash=state.paper_cash,
+            starting_balance=state.starting_balance,
+            realized_pnl=state.realized_pnl,
+            trade_count=state.trade_count,
+            open_position=(
+                ManualPositionModel.from_trade(state.open_position)
+                if state.open_position is not None
+                else None
+            ),
+            bars_held=state.bars_held,
+            journal=[ManualTradeModel.from_trade(trade) for trade in state.journal],
+            execution_price_preview=state.execution_price_preview,
+            execution_bar_timestamp=state.execution_bar_timestamp,
+            max_size_pct=session.manual_config.max_size_pct,
+            preview_note=PREVIEW_NOTE,
+            replay=ReplayStateResponse.from_state(state.replay, mode="manual"),
         )

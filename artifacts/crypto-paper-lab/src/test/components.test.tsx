@@ -107,10 +107,14 @@ describe("mode rendering", () => {
     expect(
       screen.getByTestId("mode-alerts").getAttribute("data-executable"),
     ).toBe("false");
-    // `manual` is the reserved example now that daily_target is executable (Phase 24B).
+    // `high_risk` is the reserved example now that daily_target (24C) and manual
+    // (25B) are both executable.
+    expect(
+      screen.getByTestId("mode-high_risk").getAttribute("data-available"),
+    ).toBe("false");
     expect(
       screen.getByTestId("mode-manual").getAttribute("data-available"),
-    ).toBe("false");
+    ).toBe("true");
     expect(
       screen.getByTestId("mode-daily_target").getAttribute("data-available"),
     ).toBe("true");
@@ -128,21 +132,25 @@ describe("mode rendering", () => {
     const label = (mode: string) =>
       (screen.getByTestId(`mode-${mode}`).textContent ?? "").toLowerCase();
 
-    expect(label("manual")).toContain("reserved");
+    expect(label("high_risk")).toContain("reserved");
     expect(label("alerts")).toContain("observation only");
     expect(label("standard")).toContain("executable");
-    // Daily Target is executable, and must be labelled as such rather than reserved.
+    // Both Phase 24 and Phase 25 modes are executable and must be labelled as such
+    // rather than reserved.
     expect(label("daily_target")).toContain("executable");
     expect(label("daily_target")).not.toContain("reserved");
+    expect(label("manual")).toContain("executable");
+    expect(label("manual")).not.toContain("reserved");
   });
 
   it("selects a reserved mode without executing anything", () => {
     const onSelect = vi.fn();
     render(<ModeSelector modes={MODES} selected="standard" onSelect={onSelect} />);
 
-    fireEvent.click(screen.getByTestId("mode-manual"));
+    // `high_risk`, now that `manual` became executable in Phase 25B.
+    fireEvent.click(screen.getByTestId("mode-high_risk"));
 
-    expect(onSelect).toHaveBeenCalledWith("manual");
+    expect(onSelect).toHaveBeenCalledWith("high_risk");
     // Selection is a read-only act; the parent decides whether to issue a request.
     expect(onSelect).toHaveBeenCalledTimes(1);
   });
@@ -177,9 +185,9 @@ describe("mode rendering", () => {
 
 describe("unavailable mode behaviour", () => {
   it("shows the server's note for a reserved mode", () => {
-    // `manual`, not `daily_target`: the latter became executable in Phase 24B, so it
-    // no longer reaches UnavailableModePanel.
-    const mode = modeNamed("manual");
+    // `high_risk`, not `manual` or `daily_target`: both became executable (Phases
+    // 24C and 25B), so neither reaches UnavailableModePanel any more.
+    const mode = modeNamed("high_risk");
     const { container } = render(
       <UnavailableModePanel label={mode.label} note={mode.note} />,
     );
@@ -200,7 +208,7 @@ describe("unavailable mode behaviour", () => {
 
   it("offers no control buttons at all", () => {
     render(
-      <UnavailableModePanel label="Manual" note="Reserved." />,
+      <UnavailableModePanel label="High-Risk Paper" note="Reserved." />,
     );
 
     expect(screen.queryByTestId("control-start")).toBeNull();

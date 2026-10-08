@@ -57,6 +57,7 @@ import {
 } from "@/components/ai-panels";
 import { AlertsPanel } from "@/components/alerts-panel";
 import { DailyTargetPanel } from "@/components/daily-target-panels";
+import { ManualPanel } from "@/components/manual-panels";
 
 import {
   describeError,
@@ -74,6 +75,8 @@ import {
   useAutoStep,
   useDailyTargetConfig,
   useDailyTargetState,
+  useManualActions,
+  useManualState,
   useHealth,
   useMarket,
   useModes,
@@ -104,6 +107,7 @@ export function Dashboard() {
   const isAi = mode?.mode === "ai_intelligence";
   const isAlerts = mode?.mode === "alerts";
   const isDailyTarget = mode?.mode === "daily_target";
+  const isManual = mode?.mode === "manual";
 
   // Alerts and reserved modes issue no replay request at all.
   const replay = useReplayState(isControllable ? mode : undefined);
@@ -117,6 +121,13 @@ export function Dashboard() {
   // The target editor's mutation. Created unconditionally so the hook order is stable
   // across mode switches; it only fires when Daily Target is selected.
   const dailyConfig = useDailyTargetConfig();
+
+  // Manual's paper state and its action mutations. Created unconditionally so the hook
+  // order stays stable across mode switches; neither fires unless Manual is selected.
+  const manual = useManualState(isManual);
+  const manualActions = useManualActions();
+
+  const manualError = queryError(manual);
 
   const account = useStandardAccount(mode?.mode === "standard");
   const trades = useTrades(mode?.mode === "standard");
@@ -163,8 +174,10 @@ export function Dashboard() {
         ? [queryKeys.ai()]
         : isDailyTarget
           ? [queryKeys.dailyTarget()]
-          : [queryKeys.account(), queryKeys.trades(), queryKeys.statistics()],
-    [isAi, isDailyTarget],
+          : isManual
+            ? [queryKeys.manual()]
+            : [queryKeys.account(), queryKeys.trades(), queryKeys.statistics()],
+    [isAi, isDailyTarget, isManual],
   );
 
   // Advance the engine while it reports `running`. The server sets the flag on Start
@@ -373,6 +386,30 @@ export function Dashboard() {
             refusal={refusal}
             controlsEnabled={Boolean(mode?.available && mode.supports_execution)}
             modeLabel={mode?.label ?? "Daily Target"}
+            status={replay.data?.status}
+            busy={controls.busy}
+            stepCount={stepCount}
+            onStepCountChange={setStepCount}
+            onStart={() => controls.start.mutate(undefined)}
+            onPause={() => controls.pause.mutate()}
+            onStep={handleStep}
+            onReset={handleReset}
+          />
+        ) : isManual ? (
+          <ManualBody
+            manual={manual.data}
+            isLoading={manual.isLoading}
+            error={manualError}
+            onSubmit={({ action, sizePct }) =>
+              manualActions.submit.mutate({ action, sizePct })
+            }
+            onCancel={() => manualActions.cancel.mutate()}
+            isSubmitting={manualActions.submit.isPending}
+            isCancelling={manualActions.cancel.isPending}
+            actionError={manualActions.submit.error ?? null}
+            refusal={refusal}
+            controlsEnabled={Boolean(mode?.available && mode.supports_execution)}
+            modeLabel={mode?.label ?? "Manual"}
             status={replay.data?.status}
             busy={controls.busy}
             stepCount={stepCount}
@@ -716,6 +753,99 @@ function DailyTargetBody({
         onSetTarget={onSetTarget}
         isSetting={isSetting}
         setError={setError}
+      />
+    </div>
+  );
+}
+
+/**
+ * Manual's body.
+ *
+ * ## The shared lifecycle controls
+ *
+ * START, PAUSE, STEP and RESET are the same controls every controllable mode uses,
+ * against `?mode=manual`. Manual needs no new affordance for its own behaviour, because
+ * its distinguishing rule is an *absence*: nothing happens unless the user asks.
+ *
+ * That is also why there is no "auto-trade" toggle to disable. A switch labelled "don't
+ * trade automatically" would imply trading automatically is the default somewhere, and
+ * in Manual it never is.
+ *
+ * ## STEP is the only way an action fills
+ *
+ * The action panel says so, and it is the single most important sentence on the page: a
+ * requested action is an intent, and the engine fills it against the bar the next step
+ * reaches. A user who clicks Buy and sees nothing happen has been given the reason
+ * rather than left to wonder whether the button is broken.
+ */
+function ManualBody({
+  manual,
+  isLoading,
+  error,
+  onSubmit,
+  onCancel,
+  isSubmitting,
+  isCancelling,
+  actionError,
+  refusal,
+  controlsEnabled,
+  modeLabel,
+  status,
+  busy,
+  stepCount,
+  onStepCountChange,
+  onStart,
+  onPause,
+  onStep,
+  onReset,
+}: {
+  manual: Parameters<typeof ManualPanel>[0]["manual"];
+  isLoading: boolean;
+  error: ApiError | null;
+  onSubmit: (request: {
+    action: "ENTER_LONG" | "ENTER_SHORT" | "EXIT";
+    sizePct?: number;
+  }) => void;
+  onCancel: () => void;
+  isSubmitting: boolean;
+  isCancelling: boolean;
+  actionError: ApiError | null;
+} & ControlsProps) {
+  return (
+    <div className="flex flex-col gap-6">
+      <div className="border border-border rounded-lg px-4 py-3 bg-card">
+        <PaperControls
+          status={status}
+          modeLabel={modeLabel}
+          busy={busy}
+          disabled={!controlsEnabled}
+          onStart={onStart}
+          onPause={onPause}
+          onStep={onStep}
+          onReset={onReset}
+          refusal={refusal}
+          stepCount={stepCount}
+          onStepCountChange={onStepCountChange}
+        />
+        <p className="text-[11px] text-muted-foreground mt-3 border-l-2 border-primary/40 pl-3 leading-relaxed">
+          These controls drive the manual mode&apos;s replay through the shared
+          transport (<code className="font-mono">?mode=manual</code>). Balance,
+          position and journal come from{" "}
+          <code className="font-mono">GET /api/manual</code>, and actions are sent to{" "}
+          <code className="font-mono">POST /api/manual/action</code> — nothing is
+          computed here.
+        </p>
+      </div>
+
+      <ManualPanel
+        manual={manual}
+        isLoading={isLoading}
+        error={error}
+        onSubmit={(action, sizePct) => onSubmit({ action, sizePct })}
+        onCancel={onCancel}
+        isSubmitting={isSubmitting}
+        isCancelling={isCancelling}
+        actionError={actionError}
       />
     </div>
   );

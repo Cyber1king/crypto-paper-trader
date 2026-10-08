@@ -24,6 +24,7 @@ import {
   type ApiError,
   type DailyTargetResponse,
   type HealthResponse,
+  type ManualStateResponse,
   type MarketResponse,
   type ModeInfo,
   type ModesResponse,
@@ -78,11 +79,11 @@ export const MODES: ModesResponse = {
     },
     {
       mode: "manual",
-      label: "Manual",
+      label: "Manual \u2014 Paper Trading",
       supports_execution: true,
-      available: false,
-      note: "Reserved. The mode contract is defined in Phase 17G.",
-      policy: { name: "reserved_manual", max_positions: 0 },
+      available: true,
+      note: "Manual paper trading. Nothing opens or closes unless you ask it to: the strategy's own entry and exit rules are switched off, so a position you open stays open until you exit it. One paper position, long or short, sized as a percentage of paper cash with no credit facility. An action fills at the next candle's open, so the price is set when the replay advances and not before. Simulation only, not a real position.",
+      policy: { name: "manual", max_positions: 1 },
     },
     {
       mode: "high_risk",
@@ -550,6 +551,124 @@ export const DAILY_TARGET_OVERSHOOT: DailyTargetResponse = {
     },
   ],
   replay: { ...REPLAY_STEPPED, mode: "daily_target", status: "paused" },
+};
+
+// ---------------------------------------------------------------------------
+// Manual (Phase 25B)
+// ---------------------------------------------------------------------------
+
+/** The engine's paper-only statement, copied from `crypto_paper_lab/manual_paper.py`. */
+export const MANUAL_NOTE =
+  "Paper trading only. Actions are simulated fills on historical candles, not orders, and nothing here is a real position.";
+
+/**
+ * The wording a UI must show beside the execution-price preview.
+ *
+ * Load-bearing: the preview is a real engine value and also the easiest number in this
+ * mode to misread as a quote. It is served by the engine so a client cannot drop it.
+ */
+export const MANUAL_PREVIEW_NOTE = "Preview — not a fill price.";
+
+/** Manual before any action: flat, full cash, both entries available. */
+export const MANUAL_FLAT: ManualStateResponse = {
+  mode: "manual",
+  note: MANUAL_NOTE,
+  available_actions: ["ENTER_LONG", "ENTER_SHORT"],
+  pending_action: null,
+  paper_note: null,
+  paper_cash: 10000.0,
+  starting_balance: 10000.0,
+  realized_pnl: 0.0,
+  trade_count: 0,
+  open_position: null,
+  bars_held: null,
+  journal: [],
+  execution_price_preview: 43679.7,
+  execution_bar_timestamp: "2024-01-01T22:00:00+00:00",
+  max_size_pct: 1.0,
+  preview_note: MANUAL_PREVIEW_NOTE,
+  replay: { ...REPLAY_IDLE, mode: "manual" },
+};
+
+/**
+ * A long that has filled and is held.
+ *
+ * Every strategy instrumentation field is `null`, and that is the point: a user's
+ * decision has no signal behind it, so the engine produced no trend state or breakout
+ * distance. A fixture that filled them in would let a component invent data and still
+ * pass.
+ */
+export const MANUAL_HOLDING_LONG: ManualStateResponse = {
+  ...MANUAL_FLAT,
+  available_actions: ["EXIT"],
+  paper_cash: 10000.0,
+  open_position: {
+    side: "long",
+    entry_time: "2024-01-01T22:00:00+00:00",
+    entry_price: 43679.7,
+    raw_entry_price: 43679.7,
+    quantity: 0.0228939,
+    reason: "manual entry (ENTER_LONG)",
+    signal_close: null,
+    trend_state: null,
+    breakout_distance: null,
+    retest_distance: null,
+    realised_volatility: null,
+    mean_range: null,
+    support_at_entry: 43583.9,
+    resistance_at_entry: 43761.9,
+  },
+  bars_held: 3,
+  execution_price_preview: 44230.3,
+  execution_bar_timestamp: "2024-01-02T01:00:00+00:00",
+  replay: { ...REPLAY_STEPPED, mode: "manual" },
+};
+
+/** A pending intent. Nothing has filled: `open_position` is still null. */
+export const MANUAL_PENDING: ManualStateResponse = {
+  ...MANUAL_FLAT,
+  pending_action: { action: "ENTER_LONG", size_pct: 0.25 },
+};
+
+/** A finished replay: no actions available, and the reason is stated. */
+export const MANUAL_FINISHED: ManualStateResponse = {
+  ...MANUAL_FLAT,
+  available_actions: [],
+  execution_price_preview: null,
+  execution_bar_timestamp: null,
+  replay: { ...REPLAY_IDLE, mode: "manual", status: "finished", cursor: 17544 },
+};
+
+/** One closed Manual trade, profitable, exited by the user. */
+export const MANUAL_WITH_TRADE: ManualStateResponse = {
+  ...MANUAL_FLAT,
+  available_actions: ["ENTER_LONG", "ENTER_SHORT"],
+  paper_cash: 10029.516482539464,
+  realized_pnl: 29.51648253946405,
+  trade_count: 1,
+  journal: [
+    {
+      side: "long",
+      entry_time: "2024-01-01T22:00:00+00:00",
+      entry_price: 43679.7,
+      exit_time: "2024-01-01T23:00:00+00:00",
+      exit_price: 44230.3,
+      raw_entry_price: 43679.7,
+      raw_exit_price: 44230.3,
+      quantity: 0.0228939,
+      reason: "manual entry (ENTER_LONG)",
+      exit_reason: "manual",
+      bars_held: 1,
+      pnl: 126.0313,
+      costs: 7.4918,
+      net_pnl: 118.5395,
+      fee_total: 3.7636,
+      slippage_total: 3.7282,
+      spread_total: 0.0,
+      total_friction: 7.4918,
+    },
+  ],
+  replay: { ...REPLAY_STEPPED, mode: "manual" },
 };
 
 // ---------------------------------------------------------------------------

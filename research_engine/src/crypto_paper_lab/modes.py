@@ -142,6 +142,12 @@ from .daily_target import (
     TARGET_NOTE,
     WAITING_NOTE,
 )
+from .manual_paper import (
+    MANUAL_POLICY,
+    MAX_SIZE_PCT,
+    MODE_LABEL as MANUAL_LABEL,
+    MODE_NOTE as MANUAL_MODE_NOTE,
+)
 from .execution import (
     AUTOMATIC_POLICY,
     DisabledPolicy,
@@ -162,6 +168,10 @@ __all__ = [
     "DEFAULT_PROFIT_TARGET_PCT",
     "DEFAULT_TARGET_AMOUNT",
     "DEFAULT_THRESHOLD",
+    "MANUAL",
+    "MANUAL_LABEL",
+    "MANUAL_POLICY",
+    "MAX_SIZE_PCT",
     "MODES",
     "ModeError",
     "ModeNotAvailableError",
@@ -194,9 +204,13 @@ ALERTS = "alerts"
 #: Implemented: see :mod:`crypto_paper_lab.daily_target`.
 DAILY_TARGET = "daily_target"
 
+#: Explicit paper entries and exits. Implemented Phase 25B: see
+#: :mod:`crypto_paper_lab.manual_paper`. Reuses ``Replay`` and ``PaperBroker`` unchanged,
+#: because it permits one position and adds nothing the single-position broker lacks.
+MANUAL = "manual"
+
 #: Names Phase 17A defined for later phases, still unbuilt. Reserved here so they
 #: cannot be invented by accident and so requesting one fails loudly.
-RESERVED_MANUAL = "manual"
 RESERVED_HIGH_RISK = "high_risk"
 
 
@@ -343,12 +357,17 @@ MODES: Mapping[str, ModeSpec] = {
             policy=DAILY_TARGET_POLICY,
         ),
         ModeSpec(
-            mode=RESERVED_MANUAL,
-            label="Manual",
+            mode=MANUAL,
+            # The mode's own label carries "Paper Trading", so the name never appears
+            # without the word that says what it is.
+            label=MANUAL_LABEL,
             supports_execution=True,
-            available=False,
-            note="Reserved. The mode contract is defined in Phase 17G.",
-            policy=DisabledPolicy(name="reserved_manual"),
+            available=True,
+            # The note states the one behaviour that differs from every other mode: no
+            # automatic entries and no automatic exits. Without that, a user whose
+            # position survives would read it as a frozen dashboard.
+            note=MANUAL_MODE_NOTE,
+            policy=MANUAL_POLICY,
         ),
         ModeSpec(
             mode=RESERVED_HIGH_RISK,
