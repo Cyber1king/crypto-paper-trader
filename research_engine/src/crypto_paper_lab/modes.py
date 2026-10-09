@@ -94,12 +94,33 @@ policy plus capability; the pool, the positions and the P&L belong to
 ``ai_paper``. Keeping configuration free of mutable state is what lets this
 mapping stay a module-level constant that every process shares safely.
 
-Reserved modes
---------------
+Implemented modes, and the empty reserved set
+--------------------------------------------
 
-Phase 17A names four product modes: Daily Target, Manual, High-Risk Paper and
+Phase 17A named four product modes: Daily Target, Manual, High-Risk Paper and
 Alerts. Phase 17G defined the Standard, AI Intelligence and Alerts contracts and
-deliberately left the other two reserved, because their contract questions were open.
+deliberately left Daily Target, Manual and High-Risk reserved, because their
+contract questions were open. **All of them have since been implemented**, so
+:func:`reserved_modes` now returns an empty tuple and every name in
+:data:`MODES` is usable.
+
+======================  ============  ================  =====================================
+mode                    implemented   phase            what it is
+======================  ============  ================  =====================================
+``standard``            yes           17F (pre-17G)    the default; the frozen baseline
+``ai_intelligence``     yes           17G              threshold-scored, up to 5 positions
+``alerts``              yes           17A A12.1        observation only; holds no broker
+``daily_target``        yes           24B              fixed dollar objective per UTC day
+``manual``              yes           25B              the operator decides every entry
+``high_risk``           yes           26B              Standard's signals, more paper cash
+======================  ============  ================  =====================================
+
+Reserving a name remains available as a mechanism: adding a name with
+``available=False`` makes it fail explicitly rather than fall back to Standard,
+so a typo cannot create a silent new mode. There is simply nothing reserved today.
+
+What each implemented mode added
+-------------------------------
 
 **Phase 24B implements Daily Target.** It was the one reserved mode whose contract the
 architecture had already specified in full (section 10) and whose open questions, Q4
@@ -119,14 +140,20 @@ execution engine was written. Its entire contract is one entry refusal, expresse
 :class:`~crypto_paper_lab.daily_target.DailyTargetPolicy`. The day bookkeeping lives in
 :mod:`crypto_paper_lab.daily_target` and holds no broker.
 
-``high_risk`` remains reserved. High-Risk's *qualification rules* are still open
-question Q6 and must be pre-registered as research before any mode may add one.
-Manual and High-Risk both deliberately add none: Manual has no contract at all,
-since "the operator decides" is not an automatic policy, and High-Risk inherits
-Standard's signal set and differs only in how much paper cash each position
-commits (Phase 26B, :mod:`crypto_paper_lab.high_risk`). Reserving a name means a
-typo cannot create a silent new mode, and requesting a reserved one fails
-explicitly instead of falling back to Standard.
+**Phase 25B implements Manual.** Manual has no contract in the automatic sense at
+all: "the operator decides" is not a policy that decides anything. Its policy
+therefore answers ``should_enter`` ``False`` and ``select_exit`` ``None``
+unconditionally, and every fill comes from an explicit ``ENTER_LONG``,
+``ENTER_SHORT`` or ``EXIT``. See :mod:`crypto_paper_lab.manual_paper`.
+
+**Phase 26B implements High-Risk.** High-Risk's *qualification rules* were open
+question Q6, to be pre-registered as research before any mode may add one.
+**Phase 26B added none**, which makes Q6 moot rather than bypassed: High-Risk
+inherits the signal set Standard already trades and differs only in how much paper
+cash each position commits (see :mod:`crypto_paper_lab.high_risk`). It reuses
+``AUTOMATIC_POLICY`` unchanged, so there is no ``HighRiskPolicy`` and no new exit
+logic - only ``risk_fraction``, which is a ``Replay`` argument and bounded by the
+broker's own ceiling of 1.0.
 """
 from __future__ import annotations
 

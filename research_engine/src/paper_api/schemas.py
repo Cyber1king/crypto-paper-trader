@@ -34,6 +34,62 @@ class _Strict(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+def require_json_number(value: object, field: str) -> object:
+    """One numeric-input policy for every configuration endpoint (Phase 28A).
+
+    A configuration number has exactly **one** correct wire representation: a
+    JSON number. Two things are refused before Pydantic can coerce them, and
+    both are refusals of a *type*, not of a range:
+
+    * a ``bool``. Python's ``bool`` is a subclass of ``int``, so Pydantic would
+      turn ``true`` into the number ``1.0`` without complaint. For the two
+      *fraction* fields - ``risk_fraction`` and ``size_pct`` - ``1.0`` is their
+      ceiling, so a stray boolean would commit a whole paper account to a
+      request that never mentioned a number. A boolean is a type, not a size,
+      and none of these fields should ever receive one.
+    * a ``str``. Pydantic's default is *lax*: ``"0.5"`` becomes the float
+      ``0.5``. Accepting a quoted number silently means the API and the UI can
+      disagree about what was actually configured, and it means a client
+      cannot predict which rule applies.
+
+    This existed before Phase 28A only in
+    :class:`HighRiskConfigRequest`, which refused both; Manual and Daily Target
+    refused only the ``bool`` and silently accepted a quoted number. That split
+    was an accident of which phase wrote the endpoint last rather than a
+    decision anyone made. All three now share this one function, so the policy
+    cannot drift again.
+
+    **No ceiling is named here, because there is no single one.** This helper is
+    shared by a field bounded at ``1.0`` and by ``target_amount``, a dollar
+    amount whose ceiling is :data:`~crypto_paper_lab.daily_target.MAX_TARGET_AMOUNT`
+    - six orders of magnitude larger. Stating a limit would be false for two of
+    the three fields and would couple a type check to each mode's bounds.
+
+    **Ranges are not checked here at all.** ``nan``, ``inf``, ``<= 0`` and
+    anything above a field's ceiling stay owned by the engine
+    (:func:`crypto_paper_lab.high_risk.coerce_risk_fraction`,
+    :func:`crypto_paper_lab.manual_paper.coerce_size_pct`,
+    :class:`crypto_paper_lab.daily_target.DailyTargetConfig`), so a bound and
+    its wording have exactly one home whether a request arrives over HTTP or
+    from Python. The executable statement of this policy is
+    ``tests/test_config_request_policy.py``.
+    """
+
+    if isinstance(value, bool):
+        raise ValueError(
+            f"{field} must be a JSON number, not a boolean; Python treats a "
+            f"boolean as an integer, so true would be read as the number 1.0"
+        )
+
+    if isinstance(value, str):
+        raise ValueError(
+            f"{field} must be a JSON number, not a string; a quoted number would "
+            f"be silently accepted as a different value"
+        )
+
+    return value
+
+
 class StrategyIdentityModel(_Strict):
     """Which strategy configuration is loaded."""
 
@@ -1062,7 +1118,7 @@ class DailyTargetConfigRequest(_Strict):
     @field_validator("target_amount", mode="before")
     @classmethod
     def _reject_non_numeric(cls, value: object) -> object:
-        """Refuse a ``bool`` before Pydantic coerces it.
+        """Refuse a ``bool`` and a quoted number before Pydantic coerces them.
 
         Python's ``bool`` is a subclass of ``int``, so Pydantic turns ``true`` into
         ``1.0`` and the mode would quietly accept a **$1.00** target that the client
@@ -1070,16 +1126,16 @@ class DailyTargetConfigRequest(_Strict):
         is exactly the silent coercion this contract refuses to do anywhere else, so
         it is rejected at the edge.
 
+        A quoted number was accepted here until Phase 28A, because Pydantic coerces
+        ``"50"`` to ``50.0``. :class:`HighRiskConfigRequest` already refused it, so
+        the same body was a 422 on one mode and a 200 on another. Both refusals are now
+        :func:`require_json_number`, shared with the other two configuration fields.
+
         Numbers are passed through untouched - including a float ``nan`` or
         ``inf``, which the engine then rejects with its own wording.
         """
 
-        if isinstance(value, bool):
-            raise ValueError(
-                "target_amount must be a number of dollars, not a boolean"
-            )
-
-        return value
+        return require_json_number(value, "target_amount")
 
 
 class DailyResultModel(_Strict):
@@ -1300,18 +1356,21 @@ class ManualActionRequest(_Strict):
     @field_validator("size_pct", mode="before")
     @classmethod
     def _reject_non_numeric(cls, value: object) -> object:
-        """Refuse a ``bool`` and a non-number before Pydantic coerces them.
+        """Refuse a ``bool`` and a quoted number before Pydantic coerces them.
 
         ``bool`` is an ``int`` subclass, so Pydantic turns ``true`` into ``1.0`` and the
         mode would silently commit the **entire account** to a request that never
         mentioned a size. That is the worst available failure for this field, so it is
         refused at the edge rather than reaching the engine as a plausible-looking 1.0.
+
+        A quoted number was accepted here until Phase 28A: Pydantic coerced ``"0.5"``
+        to ``0.5``, and the accepted request then *replaced* any pending action. That
+        was the opposite of :class:`HighRiskConfigRequest`, which refused the same
+        value. Both refusals are now :func:`require_json_number`, shared with the other
+        two configuration fields, so the policy is stated once and cannot drift.
         """
 
-        if isinstance(value, bool):
-            raise ValueError("size_pct must be a fraction, not a boolean")
-
-        return value
+        return require_json_number(value, "size_pct")
 
 
 class ManualIntentModel(_Strict):
@@ -1614,7 +1673,7 @@ class HighRiskConfigRequest(_Strict):
     @field_validator("risk_fraction", mode="before")
     @classmethod
     def _reject_non_numeric(cls, value: object) -> object:
-        """Refuse a ``bool`` and a non-numeric string before Pydantic coerces them.
+        """Refuse a ``bool`` and a quoted number before Pydantic coerces them.
 
         ``bool`` is an ``int`` subclass, so Pydantic would turn ``true`` into
         ``1.0`` - the maximum legal size - and this mode would commit the whole
@@ -1628,20 +1687,16 @@ class HighRiskConfigRequest(_Strict):
         correct representation here, and accepting two would mean the API and the
         UI could disagree about what was actually configured.
 
-        This mirrors ``ManualActionRequest._reject_non_numeric``, so the two modes
-        handle a boolean identically rather than one guarding and one not.
+        Both refusals are now :func:`require_json_number`, shared with
+        :class:`ManualActionRequest` and :class:`DailyTargetConfigRequest`.
+        Previously this field's refusal was described as mirroring
+        ``ManualActionRequest._reject_non_numeric``, which was inaccurate:
+        Manual refused only the ``bool``, so the two endpoints disagreed about a
+        quoted number. Phase 28A made the behaviour identical instead of the
+        documentation.
         """
 
-        if isinstance(value, bool):
-            raise ValueError("risk_fraction must be a fraction, not a boolean")
-
-        if isinstance(value, str):
-            raise ValueError(
-                "risk_fraction must be a JSON number, not a string; a quoted "
-                "number would be silently accepted as a different value"
-            )
-
-        return value
+        return require_json_number(value, "risk_fraction")
 
 
 class HighRiskStateResponse(_Strict):
