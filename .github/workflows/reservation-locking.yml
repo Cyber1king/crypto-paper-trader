@@ -1,0 +1,346 @@
+name: Reservation Locking Checks
+
+# The registry write path uses an OS-native advisory lock -- fcntl.flock on
+# POSIX, msvcrt.locking on Windows -- so the exclusion and crash-recovery
+# behaviour must be exercised on every supported platform, not just the
+# development host. These tests spawn real independent processes, so the matrix
+# is deliberately narrow: one Python version, the three platforms that matter.
+#
+# SAFETY MODEL (read before adding a test here)
+# -------------------------------------------
+# 1,087 test records are on a reserved-evaluation exclusion list because their
+# call paths reach forbidden evaluation entry points (run_backtest, Replay,
+# run_experiment, run_yearly_backtests, walk_forward, ...). Five of those
+# records touch the reserved ETH dataset. A previous revision of this workflow
+# ran test_research_gaps.py and test_research_guard.py, which between them hold
+# 17 excluded records -- so this job would have executed reserved-evaluation
+# code automatically on every push to main. Those files are now removed.
+#
+# This workflow therefore NEVER uses `pytest tests/`, never negates a denylist,
+# and never names a test file it has not individually cleared. Execution is
+# driven by an explicit allowlist (SAFE_TESTS below). Adding a name to
+# SAFE_TESTS is the only way to change what runs.
+#
+# The preflight guard walks the allowlist TRANSITIVELY: from each allowlisted
+# test it resolves every crypto_paper_lab.* / paper_api.* import, recursively,
+# and refuses to run if any reachable source calls a forbidden entry point.
+# Scanning only the test files themselves was not sufficient -- a test can be
+# textually clean and still reach run_backtest through an imported helper.
+#
+# Honest limits of this guard. It is a static, name-based approximation, not a
+# proof of runtime behaviour. It does NOT follow imports outside the two project
+# packages, does not see callables reached dynamically (getattr, exec, importlib
+# hooks, monkeypatching), and cannot reason about conditional or deferred calls.
+# A file that merely DEFINES a forbidden function is not flagged; only calls are.
+# So a green preflight means "no forbidden call was found by static name
+# analysis", not "no reserved evaluation can happen". The allowlist remains the
+# primary control and the guard is defence in depth behind it.
+#
+# The guard is intentionally independent of the exclusion-audit JSON artifact:
+# that artifact is untracked, so a guard that read it would silently stop
+# guarding. The nine forbidden names are inlined below instead; if the audit is
+# ever regenerated with a different set, this list must be updated to match.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "research_engine/src/crypto_paper_lab/researchguard.py"
+      - "research_engine/src/crypto_paper_lab/registry_schema.py"
+      - "research_engine/src/crypto_paper_lab/researchindex.py"
+      - "research_engine/tests/test_registry_locking.py"
+      - "research_engine/tests/test_crash_recovery.py"
+      - "research_engine/tests/test_cross_process_guard.py"
+      - "research_engine/tests/test_reservation_single_use.py"
+      - ".github/workflows/reservation-locking.yml"
+
+# Read-only by default. This workflow only checks out code and runs tests; it
+# needs nothing else, so it should not inherit a broader repository default.
+permissions:
+  contents: read
+
+jobs:
+  locking:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+
+    runs-on: ${{ matrix.os }}
+
+    defaults:
+      run:
+        working-directory: research_engine
+
+    env:
+      # THE ALLOWLIST. The only tests this workflow may ever execute.
+      # Each of these files was cleared against the reserved-evaluation
+      # exclusion audit and contains zero excluded records.
+      SAFE_TESTS: >-
+        tests/test_registry_locking.py
+        tests/test_crash_recovery.py
+        tests/test_cross_process_guard.py
+        tests/test_reservation_single_use.py
+        tests/test_registry_schema.py
+
+      # Tests that need the protected ETH dataset, which is deliberately NOT
+      # tracked. Seven of them assert the file exists or hash it, so in a CI
+      # checkout -- where the dataset is absent by design -- they fail on
+      # FileNotFoundError rather than on any research-safety property.
+      #
+      # They are named by exact node ID, not by a `-k` expression. A name filter
+      # would be shorter but would silently drift: `test_reserved_series_still
+      # _refused_without_context` does not mention ETH in its name at all, so
+      # `-k "not eth"` would let it run and fail. These files are committed and
+      # may not be edited to add skipif markers, so the exclusion has to live
+      # here.
+      #
+      # Verified in a checkout with the dataset absent and one with it present:
+      # both produce 100 passed, 7 deselected. The job is therefore independent
+      # of a file that is not in version control.
+      #
+      # The dataset integrity and reservation checks below are what actually
+      # protect the reserved series in CI, and they read only the committed
+      # registry.
+      DATASET_DEPENDENT_TESTS: >-
+        tests/test_registry_schema.py::test_shipped_eth_dataset_still_validates
+        tests/test_registry_schema.py::test_eth_dataset_hash_unchanged
+        tests/test_registry_schema.py::test_reserved_series_still_refused_without_context
+        tests/test_registry_locking.py::test_real_eth_reservation_untouched
+        tests/test_crash_recovery.py::test_real_eth_reservation_untouched_by_crash_testing
+        tests/test_cross_process_guard.py::test_real_eth_reservation_untouched_by_all_cross_process_work
+        tests/test_reservation_single_use.py::test_real_eth_reservation_is_never_touched_by_this_module
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      # Every script step is pinned to bash. On windows-latest the default
+      # shell is PowerShell, where `python - <<'PY'` is a syntax error and
+      # "$SAFE_TESTS" would not expand, so the Windows leg would fail before
+      # reaching any test. Git Bash ships with the Windows runner.
+      - name: Report the locking backend under test
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os, sys
+          backend = "msvcrt.locking (Windows)" if os.name == "nt" else "fcntl.flock (POSIX)"
+          print(f"python   : {sys.version.split()[0]}")
+          print(f"os.name  : {os.name}")
+          print(f"lock API : {backend}")
+          PY
+
+      # Fail-closed preflight. Transitively resolves project imports reachable
+      # from each allowlisted test and refuses to run if any reachable source
+      # calls a forbidden evaluation entry point. See the header comment for
+      # what this can and cannot establish. Any unresolved import, unreadable
+      # file, or parse error is a refusal, never a pass.
+      - name: Refuse to run if any allowlisted test can reach a reserved evaluation
+        shell: bash
+        run: |
+          python - <<'PY'
+          import ast
+          import os
+          import sys
+          from pathlib import Path
+
+          # The nine entry points named by the exclusion audit.
+          FORBIDDEN = {
+              "Replay", "step", "analyze",
+              "mark_to_market_drawdown", "realised_volatility",
+              "run_backtest", "run_experiment",
+              "run_yearly_backtests", "walk_forward",
+          }
+
+          PACKAGES = ("crypto_paper_lab", "paper_api")
+          SRC = Path("src")
+          DEPTH_CAP = 8
+
+          problems = []
+          scanned = []
+
+          def resolve(dotted):
+              """Map a dotted module name to a file under src/, or None."""
+              parts = dotted.split(".")
+              if not parts or parts[0] not in PACKAGES:
+                  return None
+              direct = SRC.joinpath(*parts).with_suffix(".py")
+              if direct.is_file():
+                  return direct
+              pkg = SRC.joinpath(*parts, "__init__.py")
+              if pkg.is_file():
+                  return pkg
+              return None
+
+          def package_of(dotted):
+              parts = dotted.split(".")
+              return ".".join(parts[:-1]) or parts[0]
+
+          def imports_of(tree, dotted):
+              """Yield dotted MODULE names imported by this module.
+
+              In `from pkg.mod import Name`, Name is a symbol rather than a
+              submodule, so it is deliberately not yielded -- resolving it would
+              produce spurious failures. In the relative `from . import sub`
+              form the aliases genuinely are submodules, so those are yielded.
+              """
+              base_pkg = package_of(dotted)
+              for node in ast.walk(tree):
+                  if isinstance(node, ast.Import):
+                      for alias in node.names:
+                          if alias.name.split(".")[0] in PACKAGES:
+                              yield alias.name
+                  elif isinstance(node, ast.ImportFrom):
+                      if node.level:
+                          parts = base_pkg.split(".") if base_pkg else []
+                          up = node.level - 1
+                          if up:
+                              parts = parts[:-up] if up <= len(parts) else []
+                          target = ".".join(
+                              parts + ((node.module or "").split(".") if node.module else [])
+                          )
+                          if not target or target.split(".")[0] not in PACKAGES:
+                              continue
+                          if node.module:
+                              yield target
+                          else:
+                              for alias in node.names:
+                                  yield f"{target}.{alias.name}"
+                      elif node.module and node.module.split(".")[0] in PACKAGES:
+                          yield node.module
+
+          def scan(path, dotted, seen, depth):
+              """Scan `path` and every project module it imports, transitively."""
+              key = str(path)
+              if key in seen:
+                  return
+              seen.add(key)
+
+              if depth > DEPTH_CAP:
+                  problems.append(
+                      f"{dotted}: import depth exceeded {DEPTH_CAP} "
+                      f"(possible cycle); refusing to run"
+                  )
+                  return
+
+              try:
+                  text = path.read_text(encoding="utf-8")
+              except (OSError, UnicodeDecodeError) as exc:
+                  problems.append(f"{path}: could not be read ({exc}); refusing to run")
+                  return
+              try:
+                  tree = ast.parse(text)
+              except SyntaxError as exc:
+                  problems.append(f"{path}: could not be parsed ({exc}); refusing to run")
+                  return
+
+              found = set()
+              for node in ast.walk(tree):
+                  if isinstance(node, ast.Call):
+                      fn = node.func
+                      name = fn.attr if isinstance(fn, ast.Attribute) else getattr(fn, "id", None)
+                      if name in FORBIDDEN:
+                          found.add(name)
+
+              rel = path.as_posix()
+              scanned.append(rel)
+              if found:
+                  problems.append(f"{rel}: reaches forbidden entry point(s) {sorted(found)}")
+
+              for name in sorted(set(imports_of(tree, dotted))):
+                  child = resolve(name)
+                  if child is None:
+                      problems.append(
+                          f"{path}: project import {name!r} could not be resolved; refusing to run"
+                      )
+                      continue
+                  scan(child, name, seen, depth + 1)
+
+          allowed = os.environ.get("SAFE_TESTS", "").split()
+          if not allowed:
+              sys.exit("FAIL CLOSED: SAFE_TESTS allowlist is empty or unset")
+
+          seen = set()
+          print("allowlist:")
+          for rel in allowed:
+              print(f"  - {rel}")
+
+          for rel in allowed:
+              path = Path(rel)
+              if not path.is_file():
+                  problems.append(f"{rel}: file not found")
+                  continue
+              scan(path, rel, seen, 0)
+
+          print(f"scanned {len(scanned)} source files (allowlist plus transitive project imports):")
+          for rel in sorted(scanned):
+              print(f"    {rel}")
+
+          if problems:
+              for p in problems:
+                  print(f"REFUSED: {p}", file=sys.stderr)
+              sys.exit("FAIL CLOSED: allowlist is not provably free of reserved-evaluation paths")
+
+          print(
+              f"preflight OK: {len(allowed)} allowlisted files, "
+              f"{len(scanned)} sources scanned, 0 forbidden entry points"
+          )
+          PY
+
+      - name: Locking, crash-recovery, schema and single-use tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=()
+          for node in $DATASET_DEPENDENT_TESTS; do
+            args+=(--deselect "$node")
+          done
+          python -m pytest $SAFE_TESTS "${args[@]}" -v
+
+      - name: Confirm the reserved ETH window is untouched by the tests
+        shell: bash
+        run: |
+          python - <<'PY'
+          import hashlib, json
+          from pathlib import Path
+
+          expected = "7507c100e93b318a8be3906ef51f230467e518fb8d81149ea58fcb3739e4deeb"
+          dataset = Path("data/phase33/binance_spot_ETHUSDT_1h_202401-202610.csv")
+
+          # The protected dataset is intentionally not tracked, so it is absent
+          # from a CI checkout. Assert strictly when it is present; report the
+          # skip loudly rather than pretending an integrity check happened.
+          if dataset.is_file():
+              digest = hashlib.sha256(dataset.read_bytes()).hexdigest()
+              assert digest == expected, f"ETH dataset changed: {digest}"
+              print(f"ETH dataset present and unchanged: {digest}")
+          else:
+              print("ETH dataset not present in this checkout (it is untracked by "
+                    "design); hash check skipped. Reservation assertions below "
+                    "still run against the committed registry.")
+
+          registry = json.loads(Path("data/research_registry.json").read_text(encoding="utf-8"))
+          entry = next(
+              e for e in registry["reservations"] if e["instrument_id"] == "ETH/USDT"
+          )
+          assert entry["status"] == "RESERVED", entry["status"]
+          assert entry["used"] is False, entry["used"]
+          assert entry["preregistration_id"] is None, entry["preregistration_id"]
+          assert "used_on" not in entry, "a consumption field was introduced"
+          assert not [k for k in entry if k.startswith("used_")], "a used_* field was introduced"
+
+          print("ETH reservation intact: RESERVED / used=false / preregistration_id=null")
+          PY
