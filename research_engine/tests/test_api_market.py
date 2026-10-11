@@ -595,3 +595,446 @@ def test_cors_wildcard_absent_on_market(client: TestClient) -> None:
     )
 
     assert "access-control-allow-origin" not in response.headers
+
+
+# --- D2b: declared dataset identity on the production research-data path ----
+#
+# These use a synthetic registry. Nothing here loads the served dataset, reads
+# a price, or touches the reserved ETH file.
+
+
+def _registry(instruments, consumed=(), reservations=()):
+    return {
+        "instruments": list(instruments),
+        "consumed_windows": list(consumed),
+        "reservations": list(reservations),
+    }
+
+
+def _use_registry(monkeypatch: pytest.MonkeyPatch, registry) -> None:
+    """Point the resolver at a synthetic registry.
+
+    ``served_dataset_identity`` imports ``load_registry`` from inside the
+    function body, so the patch target is the source module -- patching
+    ``marketdata.load_registry`` would bind a name nothing reads and the tests
+    would silently exercise the real registry instead.
+    """
+
+    monkeypatch.setattr(
+        "crypto_paper_lab.researchguard.load_registry", lambda: registry
+    )
+
+
+BTC = {
+    "instrument_id": "BTC/USDT",
+    "market_type": "crypto_spot",
+    "timeframe": "1h",
+    "volume_semantics": "central_base",
+}
+
+# Declared here only so a synthetic registry can describe a contradiction. It
+# is never used to authorise anything: ETH/USDT carries a live reservation, and
+# these fixtures only assert that conflicting declarations are refused.
+ETH = {
+    "instrument_id": "ETH/USDT",
+    "market_type": "crypto_spot",
+    "timeframe": "1h",
+    "volume_semantics": "central_base",
+}
+
+
+def test_served_identity_comes_from_the_registry_manifest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The declaration is read from the manifest, never inferred from bars."""
+
+    monkeypatch.setattr(
+        marketdata, "DATASET_PATH", "data/BTCUSDT_1h_Cleaned (1).csv"
+    )
+    _use_registry(
+        monkeypatch,
+        _registry(
+            [BTC],
+            consumed=[
+                {
+                    "dataset_path": "data/BTCUSDT_1h_Cleaned (1).csv",
+                    "instrument_id": "BTC/USDT",
+                    "timeframe": "1h",
+                }
+            ],
+        ),
+    )
+
+    identity = marketdata.served_dataset_identity()
+
+    assert identity.instrument_id == "BTC/USDT"
+    assert identity.market_type == "crypto_spot"
+    assert identity.timeframe == "1h"
+    # Identity must agree with the cost authority the sessions validate against.
+    assert identity.market_type == marketdata.MARKET_TYPE
+
+
+def test_undeclared_dataset_path_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A dataset nobody declared is refused, not served with an invented identity."""
+
+    monkeypatch.setattr(marketdata, "DATASET_PATH", "data/never_declared.csv")
+    _use_registry(monkeypatch, _registry([BTC]))
+
+    with pytest.raises(RuntimeError, match="no registry declaration"):
+        marketdata.served_dataset_identity()
+
+
+def test_missing_instrument_entry_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(marketdata, "DATASET_PATH", "data/ghost.csv")
+    _use_registry(
+        monkeypatch,
+        _registry(
+            [],
+            consumed=[
+                {"dataset_path": "data/ghost.csv", "instrument_id": "GHOST/USDT",
+                 "timeframe": "1h"}
+            ],
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="no instrument entry"):
+        marketdata.served_dataset_identity()
+
+
+def test_manifest_instrument_timeframe_disagreement_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two records disagreeing is a registry bug, not something to reconcile."""
+
+    monkeypatch.setattr(marketdata, "DATASET_PATH", "data/conflict.csv")
+    _use_registry(
+        monkeypatch,
+        _registry(
+            [BTC],
+            consumed=[
+                {"dataset_path": "data/conflict.csv", "instrument_id": "BTC/USDT",
+                 "timeframe": "4h"}
+            ],
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="Refusing to reconcile"):
+        marketdata.served_dataset_identity()
+
+
+def test_reservations_are_searched_as_well_as_consumed_windows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A dataset declared only as a reservation is still declared."""
+
+    monkeypatch.setattr(marketdata, "DATASET_PATH", "data/reserved_only.csv")
+    _use_registry(
+        monkeypatch,
+        _registry(
+            [BTC],
+            reservations=[
+                {"dataset_path": "data/reserved_only.csv",
+                 "instrument_id": "BTC/USDT", "timeframe": "1h"}
+            ],
+        ),
+    )
+
+    assert marketdata.served_dataset_identity().instrument_id == "BTC/USDT"
+
+
+def test_patch_target_is_effective_not_silently_ignored(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Guards the patching mechanism itself.
+
+    If the patch target ever stopped being the module the resolver actually
+    reads, the tests above would silently fall back to the real registry and
+    pass or fail for the wrong reason. This asserts the substitution lands.
+    """
+
+    _use_registry(monkeypatch, _registry([]))
+
+    from crypto_paper_lab.researchguard import load_registry
+
+    assert load_registry() == {"instruments": [], "consumed_windows": [],
+                               "reservations": []}
+
+
+# --- D2c: registry declaration ambiguity and path normalization -------------
+#
+# Every lookup below is resolved against a synthetic registry. No dataset file
+# is read, no price is inspected, and nothing touches the reserved ETH series.
+#
+# The invariant under test: one physical dataset has exactly one declared
+# identity, and anything that could serve it under two different identities is
+# refused rather than resolved by list order.
+
+SERVED = "data/BTCUSDT_1h_Cleaned (1).csv"
+
+
+def test_conflicting_declarations_across_sections_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The same path declared in both sections under different instruments.
+
+    Previously the first match won, so list order silently decided which
+    instrument the served dataset was validated against.
+    """
+
+    monkeypatch.setattr(marketdata, "DATASET_PATH", SERVED)
+    _use_registry(
+        monkeypatch,
+        _registry(
+            [BTC, ETH],
+            consumed=[{"dataset_path": SERVED, "instrument_id": "BTC/USDT",
+                       "timeframe": "1h"}],
+            reservations=[{"dataset_path": SERVED, "instrument_id": "ETH/USDT",
+                           "timeframe": "1h"}],
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="conflicting registry declarations"):
+        marketdata.served_dataset_identity()
+
+
+def test_conflicting_duplicates_within_one_section_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A duplicate declaration is not a synonym for the first one."""
+
+    monkeypatch.setattr(marketdata, "DATASET_PATH", SERVED)
+    _use_registry(
+        monkeypatch,
+        _registry(
+            [BTC, ETH],
+            consumed=[
+                {"dataset_path": SERVED, "instrument_id": "BTC/USDT",
+                 "timeframe": "1h"},
+                {"dataset_path": SERVED, "instrument_id": "ETH/USDT",
+                 "timeframe": "1h"},
+            ],
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="conflicting registry declarations"):
+        marketdata.served_dataset_identity()
+
+
+def test_same_instrument_conflicting_timeframe_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Agreement is required on timeframe too, not only on the instrument."""
+
+    monkeypatch.setattr(marketdata, "DATASET_PATH", SERVED)
+    _use_registry(
+        monkeypatch,
+        _registry(
+            [BTC],
+            consumed=[
+                {"dataset_path": SERVED, "instrument_id": "BTC/USDT",
+                 "timeframe": "1h"},
+                {"dataset_path": SERVED, "instrument_id": "BTC/USDT",
+                 "timeframe": "4h"},
+            ],
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="conflicting registry declarations"):
+        marketdata.served_dataset_identity()
+
+
+def test_case_only_path_collision_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two records differing only in case name one file on this filesystem.
+
+    Case-insensitive lookup means ``DATA/X.CSV`` and ``data/x.csv`` are the
+    same file, so declaring them as different instruments must not resolve to
+    whichever was listed first.
+    """
+
+    monkeypatch.setattr(marketdata, "DATASET_PATH", SERVED)
+    _use_registry(
+        monkeypatch,
+        _registry(
+            [BTC, ETH],
+            consumed=[
+                {"dataset_path": SERVED, "instrument_id": "BTC/USDT",
+                 "timeframe": "1h"},
+                {"dataset_path": SERVED.upper(), "instrument_id": "ETH/USDT",
+                 "timeframe": "1h"},
+            ],
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="conflicting registry declarations"):
+        marketdata.served_dataset_identity()
+
+
+@pytest.mark.parametrize(
+    "requested",
+    [
+        "data/BTCUSDT_1h_Cleaned (1).csv",
+        "data\\BTCUSDT_1h_Cleaned (1).csv",
+        "./data/BTCUSDT_1h_Cleaned (1).csv",
+        "data//BTCUSDT_1h_Cleaned (1).csv",
+        "././data/BTCUSDT_1h_Cleaned (1).csv",
+        "DATA/BTCUSDT_1H_CLEANED (1).CSV",
+    ],
+    ids=["identical", "backslashes", "dot-prefix", "double-separator",
+         "repeated-dot", "uppercase"],
+)
+def test_equivalent_path_forms_resolve_to_one_identity(
+    monkeypatch: pytest.MonkeyPatch, requested: str
+) -> None:
+    """Spelling differences must not change which declaration is found.
+
+    Each of these names the same file, so each must resolve to the one declared
+    identity rather than refusing or, worse, matching a different record.
+    """
+
+    monkeypatch.setattr(marketdata, "DATASET_PATH", requested)
+    _use_registry(
+        monkeypatch,
+        _registry(
+            [BTC],
+            consumed=[{"dataset_path": SERVED, "instrument_id": "BTC/USDT",
+                       "timeframe": "1h"}],
+        ),
+    )
+
+    identity = marketdata.served_dataset_identity()
+
+    assert identity.instrument_id == "BTC/USDT"
+    assert identity.market_type == "crypto_spot"
+    assert identity.timeframe == "1h"
+
+
+# --- D2d: absolute-path refusal and full identity agreement ----------------
+#
+# The canonicalizer drops empty segments, so a leading "/" or "\" disappears
+# during normalization. An absolute request would therefore be reduced to the
+# same key as a repo-relative declaration and could match one it does not name.
+# These tests pin the refusal that happens *before* canonicalization.
+
+
+@pytest.mark.parametrize(
+    "requested",
+    [
+        "/data/example.csv",
+        "C:\\data\\example.csv",
+        "C:/data/example.csv",
+        "\\data\\example.csv",
+        "//server/share/example.csv",
+    ],
+    ids=["posix-absolute", "windows-drive", "windows-drive-slash",
+         "windows-rooted", "unc"],
+)
+def test_absolute_and_rooted_paths_refused(
+    monkeypatch: pytest.MonkeyPatch, requested: str
+) -> None:
+    """An absolute path must never resolve a repository-relative declaration.
+
+    Without this refusal ``/data/x.csv`` canonicalizes to ``data/x.csv`` and
+    would match a relative declaration it does not actually name.
+    """
+
+    monkeypatch.setattr(marketdata, "DATASET_PATH", "data/example.csv")
+    _use_registry(
+        monkeypatch,
+        _registry(
+            [BTC],
+            consumed=[{"dataset_path": "data/example.csv",
+                       "instrument_id": "BTC/USDT", "timeframe": "1h"}],
+        ),
+    )
+
+    monkeypatch.setattr(marketdata, "DATASET_PATH", requested)
+
+    with pytest.raises(RuntimeError, match="absolute or filesystem-rooted"):
+        marketdata.served_dataset_identity()
+
+
+def test_relative_forms_still_resolve_alongside_absolute_refusal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The absolute-path refusal must not narrow what relative paths accept."""
+
+    _use_registry(
+        monkeypatch,
+        _registry(
+            [BTC],
+            consumed=[{"dataset_path": "data/example.csv",
+                       "instrument_id": "BTC/USDT", "timeframe": "1h"}],
+        ),
+    )
+
+    for spelling in (
+        "data/example.csv",
+        "./data/example.csv",
+        "data\\example.csv",
+        "data//example.csv",
+        "././data/example.csv",
+        "data/./example.csv",
+        "DATA/EXAMPLE.CSV",
+    ):
+        monkeypatch.setattr(marketdata, "DATASET_PATH", spelling)
+        identity = marketdata.served_dataset_identity()
+        assert identity.instrument_id == "BTC/USDT", spelling
+        assert identity.market_type == "crypto_spot", spelling
+        assert identity.timeframe == "1h", spelling
+
+
+def test_conflicting_dataset_sha256_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Agreement on instrument and timeframe is not agreement on identity.
+
+    ``dataset_sha256`` is a DatasetIdentity field carried on both record
+    types, so two records claiming one path holds two different sets of bytes
+    are contradictory even though instrument and timeframe match.
+    """
+
+    monkeypatch.setattr(marketdata, "DATASET_PATH", SERVED)
+    _use_registry(
+        monkeypatch,
+        _registry(
+            [BTC],
+            consumed=[{"dataset_path": SERVED, "instrument_id": "BTC/USDT",
+                       "timeframe": "1h", "dataset_sha256": "a" * 64}],
+            reservations=[{"dataset_path": SERVED, "instrument_id": "BTC/USDT",
+                           "timeframe": "1h", "dataset_sha256": "b" * 64}],
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="conflicting dataset_sha256"):
+        marketdata.served_dataset_identity()
+
+
+def test_absent_digest_is_not_treated_as_conflict(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unstated digest is not a contradictory one.
+
+    Two records agreeing on instrument and timeframe, where one simply omits
+    the digest, must still resolve -- otherwise the conflict check would refuse
+    correct registries that record the digest unevenly.
+    """
+
+    monkeypatch.setattr(marketdata, "DATASET_PATH", SERVED)
+    _use_registry(
+        monkeypatch,
+        _registry(
+            [BTC],
+            consumed=[{"dataset_path": SERVED, "instrument_id": "BTC/USDT",
+                       "timeframe": "1h", "dataset_sha256": "A" * 64}],
+            reservations=[{"dataset_path": SERVED, "instrument_id": "BTC/USDT",
+                           "timeframe": "1h"}],
+        ),
+    )
+
+    assert marketdata.served_dataset_identity().instrument_id == "BTC/USDT"

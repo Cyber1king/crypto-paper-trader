@@ -5,6 +5,8 @@ interfaces. It does not parse CSV, does not implement a second loader, and
 does not alter the data in any way:
 
 * ``dataset.load_dataset`` performs the read.
+* ``dataset.validate_dataset`` enforces the series against the identity the
+  registry manifest declares for it (market, instrument, timeframe, spacing).
 * ``walkforward.validate_dataset_integrity`` verifies the SHA-256 fingerprint,
   the declared bounds and count, strict timestamp ordering, and exact 3600 s
   spacing.
@@ -25,7 +27,15 @@ from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
 
-from crypto_paper_lab.dataset import load_dataset
+from crypto_paper_lab.costs import (
+    DEFAULT_MARKET_TYPE as _DEFAULT_MARKET_TYPE,
+    MARKET_COST_PROFILES as _MARKET_COST_PROFILES,
+)
+from crypto_paper_lab.dataset import (
+    identity_for_dataset_path,
+    load_dataset,
+    validate_dataset,
+)
 from crypto_paper_lab.walkforward import (
     DATASET_PATH,
     DATASET_SHA256,
@@ -50,6 +60,32 @@ MAX_LIMIT = 5000
 #: is ever exposed through the API.
 SOURCE_LABEL = "local-research-dataset"
 
+#: The market this dataset loader serves.
+#:
+#: Derived from :mod:`crypto_paper_lab.costs` rather than written here. This
+#: constant is load-bearing -- ``PaperSession`` validates the cost model of
+#: every served session against it -- so a second hardcoded copy of
+#: ``"crypto_spot"`` would be a silent way for the served market and the
+#: cost market to drift apart. There were six such copies in this package;
+#: this one now points at the same authority every cost record derives from.
+#:
+#: The assertion below fails closed at import rather than degrading: if a
+#: market is renamed or removed from the profile registry, a served API that
+#: still called itself ``crypto_spot`` would be a correctness problem that
+#: should stop the process, not something a request should discover.
+MARKET_TYPE = _DEFAULT_MARKET_TYPE
+
+if MARKET_TYPE not in _MARKET_COST_PROFILES:
+    raise RuntimeError(
+        f"served market {MARKET_TYPE!r} has no validated cost profile; "
+        "the API would be able to serve a market it cannot cost"
+    )
+
+#: Guard decisions for the served dataset, appended on first load. The API serves
+#: a consumed window, so these exist to make that visible to an audit rather than
+#: to block it. Empty until :func:`load_research_candles` has run.
+CONSUMED_DATASET_DECISION: list = []
+
 
 def dataset_path() -> Path:
     """Absolute path of the frozen dataset. Internal use only."""
@@ -57,17 +93,75 @@ def dataset_path() -> Path:
     return RESEARCH_ENGINE_ROOT / DATASET_PATH
 
 
+def served_dataset_identity() -> "object":
+    """Declared identity for the served dataset, taken from the registry.
+
+    ``validate_dataset_integrity`` proves *which* bytes are served: one fixed
+    hash, one count, one set of bounds, one spacing. It says nothing about what
+    those bars are *declared* to be, so it cannot catch a market or instrument
+    being served under the wrong identity.
+
+    The declaration comes from the registry manifest -- the consumed-window or
+    reservation record naming this dataset path, joined to its instrument entry
+    -- never from the candles. Deriving identity from bar contents would assert
+    a fact nobody stated, which is exactly the failure this closes.
+
+    Fails closed. An undeclared dataset path, a missing instrument entry, or a
+    manifest that disagrees with the instrument record all raise rather than
+    falling back to a default.
+
+    The registry join lives in :mod:`crypto_paper_lab.dataset` rather than here,
+    so the transport layer keeps reading the engine only through the small set of
+    interfaces ``ALLOWED_ENGINE_IMPORTS`` enumerates. ``dataset_identity`` is not
+    on that list, and reaching into it from the API would couple the two.
+    """
+
+    from crypto_paper_lab.researchguard import load_registry
+
+    return identity_for_dataset_path(DATASET_PATH, load_registry())
+
+
 @lru_cache(maxsize=1)
 def load_research_candles() -> tuple:
     """Load, verify and cache the research candles for this process.
 
     Raises on a missing file, a hash mismatch, a wrong candle count, a
-    timestamp ordering problem, or incorrect candle spacing. There is no
-    fallback: a dataset that cannot be verified is not served.
+    timestamp ordering problem, incorrect candle spacing, or a dataset that does
+    not match its declared identity. There is no fallback: a dataset that
+    cannot be verified is not served.
     """
 
     path = dataset_path()
     candles, _summary = load_dataset(path)
+
+    # Declared-identity gate (D2b).
+    #
+    # Runs before the fingerprint gate because it is the cheaper check and the
+    # more meaningful one: it refuses a series that is internally malformed or
+    # that contradicts what the registry says it is. ``validate_dataset_integrity``
+    # below then proves the bytes are the expected ones.
+    validate_dataset(candles, identity=served_dataset_identity())
+
+    # Research-integrity gate (Phase 40).
+    #
+    # The API serves one fixed dataset, so this is the easiest path to overlook
+    # and the easiest to reach directly. ``assert_series_permitted`` fingerprints
+    # the series itself: the served dataset is a *consumed* window, so it is
+    # permitted as development use and the decision records that fact.
+    #
+    # Phase 39 called ``assert_no_registered_range(allow_consumed=True)`` here,
+    # which returned a list of hits that nothing read -- the comment claimed the
+    # run was "refused" while the code silently allowed everything. The
+    # fingerprint check is what actually enforces something.
+    from crypto_paper_lab.researchguard import assert_series_permitted
+
+    decision = assert_series_permitted(candles, research_context=None)
+
+    if decision.consumed_series_development_use:
+        # Recording, not blocking: this endpoint exists to display already-spent
+        # data, and refusing it would break the dashboard without protecting
+        # anything. The decision is kept so the distinction is inspectable.
+        CONSUMED_DATASET_DECISION.append(decision)
 
     # Full integrity check: hash, declared bounds and count, strict ordering,
     # exact 1h spacing. Measured at ~8 ms, so running it once per process is
