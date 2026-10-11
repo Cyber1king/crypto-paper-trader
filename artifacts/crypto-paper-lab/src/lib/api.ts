@@ -113,6 +113,12 @@ export interface StrategyIdentity {
 
 export interface ExecutionIdentity {
   readonly execution_model: "cost_deduction" | "fill_price";
+  /**
+   * Which market the cost model describes. Distinct from the dataset's market:
+   * a data market and a cost market that disagree would mean results produced
+   * under rates never measured for this market. Optional for the same reason.
+   */
+  readonly market_type?: string | null;
   readonly fee_rate: number;
   readonly slippage_rate: number;
   readonly spread_rate: number;
@@ -274,6 +280,15 @@ export interface Candle {
 export interface MarketMetadata {
   readonly asset: string;
   readonly timeframe: string;
+  /**
+   * Which market this data is. Sent by the backend since the market endpoints
+   * were made market-aware; the interface predated the field, so it was
+   * silently dropped on the way to the screen.
+   *
+   * Optional because a response from an older backend legitimately lacks it --
+   * and absent is rendered as unknown, never defaulted to a market.
+   */
+  readonly market_type?: string | null;
   readonly source: string;
   readonly dataset_sha256: string;
   readonly dataset_candles: number;
@@ -727,6 +742,158 @@ export function isObservationOnlyMode(mode: ModeInfo): boolean {
   return mode.available && !mode.supports_execution;
 }
 
+// ---------------------------------------------------------------------------
+// Phase 49: read-only research status.
+//
+// Mirrors paper_api.schemas exactly. Optional fields are `| null`, never a
+// default value: an absent value means "not recorded", and rendering it as an
+// empty string or a zero would misrepresent the backend.
+// ---------------------------------------------------------------------------
+
+/** One instrument from the research registry. */
+export interface ResearchInstrument {
+  instrument_id: string;
+  market_type: string;
+  venue: string | null;
+  source_provider: string | null;
+  timeframe: string | null;
+  timeframes_available: string[];
+  volume_semantics: string | null;
+  timestamp_convention: string | null;
+  provenance_grade: string | null;
+  licence_knowledge: string | null;
+  bid_ask_available: boolean | null;
+  /** Governance state. Never implied by the instrument being listed. */
+  research_approval: string;
+  blocked: boolean;
+  /** Required whenever `blocked` is true; the UI must render it verbatim. */
+  blocker: string | null;
+  /** Whether an evaluation could run. NOT the same as approval. */
+  evaluation_supported: boolean;
+}
+
+export interface ResearchInstrumentsResponse {
+  instruments: ResearchInstrument[];
+  registered_count: number;
+  blocked_count: number;
+}
+
+/** One reserved evaluation window. `evaluated` is always false today. */
+export interface ResearchReservation {
+  reservation_id: string;
+  instrument_id: string;
+  dataset_sha256: string;
+  timeframe: string;
+  warmup_first: string | null;
+  warmup_last: string | null;
+  evaluation_first: string | null;
+  evaluation_last: string | null;
+  evaluation_bars: number | null;
+  status: string;
+  /** Derived by the backend: RESERVED or USED. */
+  state: string;
+  used: boolean;
+  preregistration_id: string | null;
+  note: string | null;
+  evaluated: boolean;
+}
+
+/** A permanently retired evaluation window. */
+export interface ResearchConsumedWindow {
+  instrument_id: string;
+  dataset_sha256: string;
+  timeframe: string;
+  evaluation_first: string | null;
+  evaluation_last: string | null;
+  evaluation_bars: number | null;
+  consumed_on: string | null;
+  outcome: string | null;
+  preregistration_id: string | null;
+  note: string | null;
+  retired: boolean;
+}
+
+export interface ResearchGovernanceResponse {
+  reservations: ResearchReservation[];
+  consumed_windows: ResearchConsumedWindow[];
+  registry_version: number | null;
+}
+
+/**
+ * AI research provider status.
+ *
+ * `integration_state` distinguishes NOT_IMPLEMENTED from a provider that is
+ * configured but failing. A boolean would conflate those.
+ */
+export interface ResearchProvider {
+  provider: string;
+  integration_state: string;
+  documentation_verified: boolean;
+  detail: string;
+  // There is deliberately no `credential_configured` field. The backend never
+  // reads the environment, so it could not answer that honestly; the fact that
+  // a contract is verified but no key is present is already reported truthfully
+  // as integration_state = "CONFIGURED_MISSING". An earlier version of this
+  // interface declared such a boolean, which the API never sent, so the type
+  // described a payload that did not exist.
+}
+
+export interface ResearchProvidersResponse {
+  providers: ResearchProvider[];
+  any_integrated: boolean;
+}
+
+/** A source whose documentation was verified, and why it is unusable. */
+export interface EvidenceSource {
+  publisher: string;
+  kind: string;
+  documented: boolean;
+  usable_for_evaluation: boolean;
+  reason: string;
+}
+
+/**
+ * Research evidence status.
+ *
+ * `available` is false and both collections are empty because no source is
+ * integrated. The UI renders an honest unavailable state rather than fabricating
+ * items to fill the panel.
+ */
+export interface ResearchEvidenceResponse {
+  available: boolean;
+  state: string;
+  items: Array<Record<string, unknown>>;
+  events: Array<Record<string, unknown>>;
+  detail: string;
+  sources_evaluated: EvidenceSource[];
+  /**
+   * What the backend has built versus what it has not.
+   *
+   * Additive: a client written before this field reads the six fields above
+   * unchanged. It exists so the panel can distinguish "the pipeline is
+   * implemented and the source is missing" from "nothing has been built",
+   * which are different situations and deserve different wording.
+   */
+  pipeline?: ResearchPipelineStatus | null;
+}
+
+/**
+ * News-pipeline readiness, reported by the backend.
+ *
+ * Every field describes implemented code, never retrieved content. Nothing
+ * here may be rendered as though it were news.
+ */
+export interface ResearchPipelineStatus {
+  readonly schema_implemented: boolean;
+  readonly validation_implemented: boolean;
+  readonly deduplication_implemented: boolean;
+  readonly staleness_rules_implemented: boolean;
+  readonly injection_scan_implemented: boolean;
+  readonly connector_implemented: boolean;
+  readonly advisory_only: boolean;
+  readonly detail?: string;
+}
+
 export interface PaperApiOptions {
   /**
    * Base URL of the Python service.
@@ -779,7 +946,59 @@ export class PaperApi {
     return this.request<ModesResponse>("GET", "/api/modes", undefined, signal);
   }
 
+  // -- Phase 49: read-only research status ---------------------------------
+  //
+  // All four are GET-only and take no parameters. There is deliberately no
+  // method that could approve an instrument, consume a window, or mark a
+  // reservation evaluated: those decisions belong to the Python engine and are
+  // not reachable from the interface.
+
+  async getResearchInstruments(
+    signal?: AbortSignal,
+  ): Promise<ResearchInstrumentsResponse> {
+    return this.request<ResearchInstrumentsResponse>(
+      "GET",
+      "/api/research/instruments",
+      undefined,
+      signal,
+    );
+  }
+
+  async getResearchGovernance(
+    signal?: AbortSignal,
+  ): Promise<ResearchGovernanceResponse> {
+    return this.request<ResearchGovernanceResponse>(
+      "GET",
+      "/api/research/governance",
+      undefined,
+      signal,
+    );
+  }
+
+  async getResearchProviders(
+    signal?: AbortSignal,
+  ): Promise<ResearchProvidersResponse> {
+    return this.request<ResearchProvidersResponse>(
+      "GET",
+      "/api/research/providers",
+      undefined,
+      signal,
+    );
+  }
+
+  async getResearchEvidence(
+    signal?: AbortSignal,
+  ): Promise<ResearchEvidenceResponse> {
+    return this.request<ResearchEvidenceResponse>(
+      "GET",
+      "/api/research/evidence",
+      undefined,
+      signal,
+    );
+  }
+
   // -- replay lifecycle ---------------------------------------------------
+
 
   /**
    * Replay state for one mode.
