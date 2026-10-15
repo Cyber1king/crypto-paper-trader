@@ -2,7 +2,7 @@
 from collections.abc import Sequence
 from dataclasses import replace
 
-from .costs import TradingCosts
+from .costs import TradingCosts, assert_costs_match_market
 from .models import Candle, PaperTrade
 from .results import BacktestResult
 from .simulator import PaperBroker
@@ -69,8 +69,18 @@ def run_backtest(
     risk_fraction: float = 0.01,
     costs: TradingCosts | None = None,
     evaluation_start: int | None = None,
+    research_context: object | None = None,
+    market_type: str | None = None,
 ) -> BacktestResult:
     """Run a paper-only backtest using next-candle open execution.
+
+    ``research_context`` declares that this run is a **research evaluation**
+    rather than a development or diagnostic run. Supplying it activates the
+    fail-closed guards in :mod:`researchguard`, which refuse a consumed window, a
+    mismatched or unregistered dataset, an unreserved evaluation range, a missing
+    or wrong preregistration, and an unauthorised cross-asset transfer. Omitting
+    it leaves the engine in its previous development behaviour; there is
+    deliberately no flag that disables the guards once a context is supplied.
 
     ``costs`` is optional and defaults to the standard paper-trading costs,
     which preserves the original V1 baseline exactly. Passing
@@ -119,12 +129,76 @@ def run_backtest(
             "not enough candles for configured backtest"
         )
 
+    # Validate the boundary before any guard indexes with it.
     if evaluation_start is not None and not (
         minimum_history <= evaluation_start < len(candles)
     ):
         raise ValueError(
             "evaluation_start must be at least the minimum history and "
             "strictly less than the number of candles"
+        )
+
+    # Research-integrity gate, Phase 40.
+    #
+    # ``assert_series_permitted`` fingerprints the candles actually handed to the
+    # engine, so omitting ``research_context`` is not a way to run a reserved
+    # window unchecked.
+    #
+    # With a context it performs identity, reservation and preregistration checks
+    # but does NOT spend the reservation (``mark_used=False``). Consumption is the
+    # caller's explicit decision, applied once via :func:`consume_reservation`
+    # after the run, so that a guard failure cannot spend a window and a crash
+    # mid-run cannot leave it silently spent.
+    #
+    # The run's own ``evaluation_start``/end are passed through rather than the
+    # context's declared range, because the context may describe the full
+    # window while ``run_window`` hands this call a per-window slice.
+    from .researchguard import assert_series_permitted
+
+    _guard_decision = assert_series_permitted(
+        candles,
+        research_context=research_context,
+        registry_file=(
+            research_context.registry_file if research_context is not None else None
+        ),
+        evaluation_first=(
+            candles[evaluation_start].timestamp
+            if evaluation_start is not None else None
+        ),
+        evaluation_last=(
+            candles[-1].timestamp
+            if evaluation_start is not None else None
+        ),
+        preregistration_id=(
+            research_context.preregistration_id if research_context is not None else None
+        ),
+        config_asset=(
+            research_context.config_asset if research_context is not None else None
+        ),
+        cross_asset=(
+            research_context.cross_asset if research_context is not None else None
+        ),
+        mark_used=False,
+    )
+
+    if research_context is not None and evaluation_start is None:
+        raise ValueError(
+            "a research evaluation must declare evaluation_start so the "
+            "scored window is explicit"
+        )
+
+    # A caller that knows which market its data represents may say so. A
+    # declaration that contradicts the cost model is refused here, before any
+    # bar is processed, rather than producing results under rates that were
+    # never measured for that market. Omitting the argument makes no claim
+    # about the data; it does not silently assume one.
+    if market_type is not None:
+        # ``TradingCosts()`` rather than ``phase13_costs()``: the latter
+        # lives in walkforward, which imports this module. The two carry
+        # identical defaults, and this is the same default the broker
+        # itself applies a few lines below.
+        assert_costs_match_market(
+            costs if costs is not None else TradingCosts(), market_type
         )
 
     broker = PaperBroker(starting_balance, costs=costs)

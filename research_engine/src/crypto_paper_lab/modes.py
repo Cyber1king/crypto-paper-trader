@@ -346,7 +346,7 @@ MODES: Mapping[str, ModeSpec] = {
     for spec in (
         ModeSpec(
             mode=STANDARD,
-            label="Standard",
+            label="Standard — Paper Trading",
             supports_execution=True,
             available=True,
             note=(
@@ -357,7 +357,7 @@ MODES: Mapping[str, ModeSpec] = {
         ),
         ModeSpec(
             mode=AI_INTELLIGENCE,
-            label="AI Intelligence",
+            label="AI Intelligence — Paper (No Model)",
             supports_execution=True,
             available=True,
             note=(
@@ -366,7 +366,12 @@ MODES: Mapping[str, ModeSpec] = {
                 f"{DEFAULT_MAX_POSITIONS} independent paper positions, and "
                 f"closes each at a {DEFAULT_PROFIT_TARGET_PCT * 100:g}% profit "
                 "target. The score is a research heuristic, not a probability or "
-                "a profit forecast. Own pool, own positions, own journal."
+                "a profit forecast. Own pool, own positions, own journal. "
+                "Despite the name, this mode runs no AI model: it is a "
+                "threshold comparison over deterministic code, with no model "
+                "inference and no network call. Model-assisted research lives "
+                "separately in crypto_paper_lab.ai_research, whose only "
+                "provider is offline and simulated."
             ),
             policy=AI_INTELLIGENCE_POLICY,
         ),

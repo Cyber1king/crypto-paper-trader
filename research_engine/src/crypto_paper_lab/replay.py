@@ -76,7 +76,7 @@ from .backtest import (
     _levels_breached,
     _side_allowed,
 )
-from .costs import TradingCosts
+from .costs import TradingCosts, assert_costs_match_market
 from .execution import (
     AUTOMATIC_POLICY,
     DecisionContext,
@@ -387,6 +387,11 @@ class ExecutionIdentity:
     """Which execution-cost model and account sizing are in force."""
 
     execution_model: str
+    #: Which market the cost model describes. Recorded explicitly rather than
+    #: left to be inferred from ``costs_repr``: a research record has to say
+    #: whose spread and fee schedule produced it, and parsing a repr to find
+    #: that out is not a record.
+    market_type: str
     fee_rate: float
     slippage_rate: float
     spread_rate: float
@@ -400,6 +405,7 @@ class ExecutionIdentity:
     ) -> "ExecutionIdentity":
         return cls(
             execution_model=costs.execution_model,
+            market_type=costs.market_type,
             fee_rate=costs.fee_rate,
             slippage_rate=costs.slippage_rate,
             spread_rate=costs.spread_rate,
@@ -481,6 +487,24 @@ class StepResult:
 # ---------------------------------------------------------------------------
 
 
+def _bar_values(candle: Candle) -> tuple:
+    """The comparable value of one bar.
+
+    Returns the fields rather than the object so a snapshot stays valid even
+    if the bar is later written to around ``frozen=True`` via
+    ``object.__setattr__``.
+    """
+
+    return (
+        candle.timestamp,
+        candle.open,
+        candle.high,
+        candle.low,
+        candle.close,
+        candle.volume,
+    )
+
+
 class Replay:
     """A deterministic, step-at-a-time replay of a closed candle series.
 
@@ -507,6 +531,7 @@ class Replay:
         dataset_sha256: str = DATASET_SHA256,
         ticker: Ticker | None = None,
         daily_target: Callable[[], bool] | None = None,
+    market_type: str | None = None,
     ) -> None:
         """
         Parameters
@@ -555,6 +580,16 @@ class Replay:
 
         self._candles = series
         self._config = config if config is not None else StrategyConfig()
+        # See the note on ``run_backtest``: a declared market that
+        # contradicts the cost model is refused at construction, before the
+        # replay can process a bar. Absence is not a silent default -- it
+        # means the data makes no market claim and the validated cost model
+        # governs.
+        if market_type is not None:
+            assert_costs_match_market(
+                costs if costs is not None else phase13_costs(), market_type
+            )
+
         self._costs = costs if costs is not None else phase13_costs()
         self._policy = policy
         self._risk_fraction = risk_fraction
@@ -574,6 +609,13 @@ class Replay:
             resolved_start = required
         else:
             resolved_start = start_index
+
+        # Phase 40: the fingerprint check runs before any strategy state exists,
+        # so a replay cannot step even one bar over a reserved window without a
+        # valid research context. Omitting the context is not an exemption.
+        from .researchguard import assert_series_permitted
+
+        assert_series_permitted(series, research_context=None)
 
         if resolved_start < required:
             raise InvalidStartIndexError(
@@ -610,6 +652,14 @@ class Replay:
             self._costs, risk_fraction
         )
         self._fingerprint = dataset_fingerprint(series)
+        # Captured so the per-step guard can confirm the record was
+        # not swapped, without re-digesting the series every step.
+        self._identity_record = self._fingerprint
+        self._candle_count = len(series)
+        # Endpoint *values*, not the bar objects. Holding the objects would
+        # compare a mutated bar against itself and always report no change.
+        self._first_bar = _bar_values(series[0]) if series else None
+        self._last_bar = _bar_values(series[-1]) if series else None
         self._config_hash = self._strategy_identity.config_hash
         self._costs_hash = self._execution_identity.costs_hash
 
@@ -1158,7 +1208,9 @@ class Replay:
         # ticks find no due tick and return None.
         self._ticker.disarm()
 
-        self._assert_identities_unchanged()
+        # The series is exhausted and nothing more will be stepped, so this is
+        # the one place a full content digest is affordable.
+        self._assert_identities_unchanged(full=True)
 
         return StepResult(
             cursor_before=self._cursor,
@@ -1175,13 +1227,34 @@ class Replay:
             finished=True,
         )
 
-    def _assert_identities_unchanged(self) -> None:
+    def _assert_identities_unchanged(self, *, full: bool = False) -> None:
         """Re-check config, costs and dataset after every step.
 
-        Structurally redundant for a tuple of frozen dataclasses, which is exactly
-        why it is cheap insurance: a mutation that somehow became possible would
-        raise here instead of producing a run whose halves used different
-        assumptions. Mirrors ``walkforward.py:632-648``.
+        The config and cost hashes are O(1) and are recomputed every step.
+
+        The dataset check is split by cost, because a content digest is O(n)
+        and doing it per step makes a full replay quadratic -- roughly twenty
+        minutes for one pass over the research dataset, which is the kind of
+        cost that gets paid silently until a suite takes half an hour.
+
+        What each level guarantees:
+
+        * ``full=False`` (every step) is O(1): the identity record has not been
+          swapped, and the series still has the length and the same endpoint
+          bars, value for value, that it was constructed with.
+        * ``full=True`` (once, when the series is exhausted) re-digests the
+          whole series, so an interior substitution that survived to the end of
+          a run cannot go unnoticed.
+
+        Between those two points a caller could alter an interior value and
+        restore it before the run ends. That is deliberately tolerated: it
+        cannot change any result, because a signal at step *i* is computed from
+        candles before *i* only, and altering the future and putting it back
+        leaves every earlier reading identical. Detecting it would cost a full
+        re-digest per step to guard a case that is provably harmless.
+
+        Structurally redundant for a tuple of frozen dataclasses, which is
+        exactly why it is cheap insurance. Mirrors ``walkforward.py``.
         """
 
         if config_hash(self._config) != self._config_hash:
@@ -1192,5 +1265,27 @@ class Replay:
         if costs_hash(self._costs) != self._costs_hash:
             raise ReplayError("execution costs changed during the replay")
 
-        if dataset_fingerprint(self._candles) != self._fingerprint:
+        # O(1): the identity record itself must still be the one captured at
+        # construction. Rebinding it is tampering with the run's provenance.
+        if self._fingerprint is not self._identity_record:
+            raise ReplayError("dataset identity changed during the replay")
+
+        # O(1): cheap shape invariants.
+        if len(self._candles) != self._candle_count:
+            raise ReplayError("dataset changed during the replay")
+
+        candles = self._candles
+        if candles:
+            # O(1): the endpoint bars must be the same bars, value for
+            # value. Comparing the bars rather than just their timestamps
+            # costs nothing extra and catches an endpoint field being written
+            # around the frozen guard.
+            if (
+                _bar_values(candles[0]) != self._first_bar
+                or _bar_values(candles[-1]) != self._last_bar
+            ):
+                raise ReplayError("dataset changed during the replay")
+
+        # O(n), and paid exactly once per completed replay.
+        if full and dataset_fingerprint(candles) != self._fingerprint:
             raise ReplayError("dataset changed during the replay")

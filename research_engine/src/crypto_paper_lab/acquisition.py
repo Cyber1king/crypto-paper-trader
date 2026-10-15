@@ -88,6 +88,14 @@ class AcquisitionReport:
     missing_hours: list[tuple[datetime, datetime]] = field(default_factory=list)
     overlapping_rows: list[datetime] = field(default_factory=list)
 
+    #: Explicit state of the research-window overlap check.
+    #:
+    #: An empty ``overlapping_rows`` is ambiguous -- it may mean "checked and
+    #: clean" or "never checked" -- so the state is recorded separately and
+    #: defaults to ``"failed"``: a report that never states the outcome is
+    #: treated as non-compliant rather than as a pass.
+    overlap_check: str = "failed"
+
     extra_columns: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
@@ -393,12 +401,27 @@ def normalize_source(
             report.missing_hours.append((previous.timestamp, current.timestamp))
 
     # overlap with the already-researched window
+    from .researchguard import OVERLAP_CHECKED, OVERLAP_FAILED, OVERLAP_SKIPPED
+
     if not allow_overlap_with_research:
+        report.overlap_check = OVERLAP_CHECKED
         for row in rows:
             if RESEARCH_FIRST <= row.timestamp <= RESEARCH_LAST:
                 report.overlapping_rows.append(row.timestamp)
+    else:
+        # Bypassing the guard is permitted but never silent: the report says the
+        # check was skipped rather than implying it passed.
+        report.overlap_check = OVERLAP_SKIPPED
 
     report.rows_accepted = len(rows)
+    report.notes.append(
+        f"research-window overlap check: {report.overlap_check}"
+        + (
+            f" ({len(report.overlapping_rows)} overlapping row(s))"
+            if report.overlap_check == OVERLAP_CHECKED
+            else " (guard bypassed by caller; overlap was NOT verified)"
+        )
+    )
     if rows:
         report.first_timestamp = rows[0].timestamp
         report.last_timestamp = rows[-1].timestamp

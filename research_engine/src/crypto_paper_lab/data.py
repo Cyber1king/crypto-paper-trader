@@ -1,25 +1,42 @@
 import csv
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .models import Candle
 
 
 def _parse_timestamp(value: str) -> datetime:
-    """Parse timestamps used by supported OHLCV CSV formats."""
+    """Parse timestamps used by supported OHLCV CSV formats.
+
+    All results are returned as **naive UTC**, which is the convention the rest
+    of the engine assumes. Phase 41 added the normalisation because ``Z``-suffixed
+    input previously produced a timezone-*aware* datetime while plain ISO input
+    produced a naive one, so the same file could yield two incompatible types and
+    comparison later raised ``TypeError`` instead of a clean refusal.
+
+    Aware input is converted to UTC and stripped; naive input is accepted as
+    already-UTC and left alone. Mixing the two forms within one file is now
+    rejected by :func:`~crypto_paper_lab.dataset.validate_dataset` rather than
+    crashing a comparison.
+    """
 
     value = value.strip()
 
     if "T" in value:
-        return datetime.fromisoformat(
+        parsed = datetime.fromisoformat(
             value.replace("Z", "+00:00")
         )
+    else:
+        parsed = datetime.strptime(
+            value,
+            "%d-%m-%Y %H:%M",
+        )
 
-    return datetime.strptime(
-        value,
-        "%d-%m-%Y %H:%M",
-    )
+    if parsed.tzinfo is not None:
+        return parsed.astimezone(timezone.utc).replace(tzinfo=None)
+
+    return parsed
 
 
 def load_ohlcv_csv(path: str | Path) -> list[Candle]:

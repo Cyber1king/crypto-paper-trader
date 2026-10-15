@@ -254,6 +254,32 @@ def sha256_of_file(path: str | Path) -> str:
     return digest.hexdigest().upper()
 
 
+def assert_dataset_not_reserved(
+    candles: Sequence[Candle],
+    *,
+    registry_file: str | Path | None = None,
+) -> None:
+    """Refuse to *validate* a series that contains a reserved evaluation window.
+
+    Phase 40. Validation is not evaluation, so this does not block the dashboard
+    or the existing suite. But integrity-checking the reserved window before an
+    evaluation is how a run gets prepared, and silently succeeding on unapproved
+    data is a misleading signal. Refusing here makes the block visible at the
+    earliest step rather than at execution time.
+
+    A consumed window is still permitted: its integrity check is a historical
+    fact and remains useful.
+    """
+
+    from .researchguard import assert_series_permitted
+
+    assert_series_permitted(
+        candles,
+        research_context=None,
+        registry_file=registry_file,
+    )
+
+
 def validate_dataset_integrity(
     candles: Sequence[Candle],
     path: str | Path | None = None,
@@ -433,13 +459,138 @@ def costs_hash(costs: TradingCosts) -> str:
     return _stable_hash(costs)
 
 
-def dataset_fingerprint(candles: Sequence[Candle]) -> tuple[int, datetime, datetime]:
-    """Cheap fingerprint used to detect dataset mutation mid-run."""
+#: Version of the canonical form hashed into :func:`dataset_fingerprint`.
+#:
+#: Bump this whenever the canonical form changes -- a new column, a different
+#: float encoding, a change to how missing values are treated. Two identities
+#: carrying different versions are never comparable, and that is deliberate: a
+#: silent format change must not produce identities that appear interchangeable.
+DATASET_FINGERPRINT_SCHEMA_VERSION = "candle-series-sha256/1"
 
-    if not candles:
-        return (0, DATASET_FIRST, DATASET_LAST)
 
-    return (len(candles), candles[0].timestamp, candles[-1].timestamp)
+class DatasetContentIdentityError(ValueError):
+    """A candle series cannot be given a content identity."""
+
+
+@dataclass(frozen=True)
+class DatasetContentIdentity:
+    """Content-based identity of a *validated* candle series.
+
+    Distinct from :class:`crypto_paper_lab.dataset_identity.DatasetIdentity`,
+    which records what a dataset *claims* to be. This records what it *is*: a
+    digest of its canonicalised content.
+
+    Also distinct from :func:`crypto_paper_lab.researchguard.candle_fingerprint`,
+    which is the reservation guard's identity. That function is left exactly as
+    it is, because registry reservations already record digests in its format;
+    changing it would invalidate every stored reservation.
+    """
+
+    schema_version: str
+    count: int
+    first: datetime | None
+    last: datetime | None
+    content_sha256: str
+
+    def short(self) -> str:
+        """A display form. Never use this for identity comparison."""
+        return f"{self.content_sha256[:16]}… ({self.count} bars)"
+
+
+def dataset_fingerprint(candles: Sequence[Candle]) -> DatasetContentIdentity:
+    """Content-based identity of a candle series.
+
+    The previous implementation returned ``(count, first, last)``, which cannot
+    distinguish two different datasets that share a length and endpoints. Any
+    interior value could have been altered -- or a whole interior block swapped --
+    without the identity moving at all. This version digests the content.
+
+    Canonical form, defined explicitly so it is reproducible:
+
+    * the schema version and a newline are hashed first, so a future format
+      change is detectable rather than silently comparable;
+    * one record per candle, in the order given;
+    * ``timestamp`` as ``datetime.isoformat()`` encoded UTF-8;
+    * a single ``|`` byte as the field separator;
+    * ``open, high, low, close, volume`` as five IEEE-754 binary64 values packed
+      little-endian (``struct`` format ``<5d``), which reproduces every value
+      bit-exactly and is neither locale-dependent nor dependent on the platform's
+      float formatting;
+    * a ``\\n`` byte terminating each record.
+
+    The floats packed are the ones that were validated: each field is converted
+    with ``float()`` before both the finiteness check and the packing, so what
+    is checked and what is hashed cannot disagree.
+
+    Hashing is streaming: memory use is independent of series length.
+
+    Ambiguity is resolved by *distinguishing*, not by normalising. Timestamps
+    that are timezone-aware and naive serialise differently and therefore
+    digest differently -- this series is not silently rewritten into another.
+    Values that cannot be represented at all (NaN, infinity) are refused.
+    """
+
+    import hashlib
+    import math
+    import struct
+
+    digest = hashlib.sha256()
+    update = digest.update
+    pack_five = struct.Struct("<5d").pack
+
+    update(DATASET_FINGERPRINT_SCHEMA_VERSION.encode("ascii"))
+    update(b"\n")
+
+    count = 0
+    first: datetime | None = None
+    last: datetime | None = None
+
+    for candle in candles:
+        stamp = candle.timestamp
+        if stamp.__class__ is not datetime and not isinstance(stamp, datetime):
+            raise DatasetContentIdentityError(
+                f"candle {count} has a non-datetime timestamp: {stamp!r}"
+            )
+
+        values = (candle.open, candle.high, candle.low, candle.close, candle.volume)
+        numbers = []
+        for name, value in zip(
+            ("open", "high", "low", "close", "volume"), values
+        ):
+            try:
+                number = float(value)
+            except (TypeError, ValueError) as exc:
+                raise DatasetContentIdentityError(
+                    f"candle {count} field {name!r} is not a real number: "
+                    f"{value!r}"
+                ) from exc
+            if number != number:
+                raise DatasetContentIdentityError(
+                    f"candle {count} field {name!r} is NaN; it has no canonical form"
+                )
+            if number == math.inf or number == -math.inf:
+                raise DatasetContentIdentityError(
+                    f"candle {count} field {name!r} is infinite"
+                )
+            numbers.append(number)
+
+        if count == 0:
+            first = stamp
+        last = stamp
+
+        update(stamp.isoformat().encode("utf-8"))
+        update(b"|")
+        update(pack_five(*numbers))
+        update(b"\n")
+        count += 1
+
+    return DatasetContentIdentity(
+        schema_version=DATASET_FINGERPRINT_SCHEMA_VERSION,
+        count=count,
+        first=first,
+        last=last,
+        content_sha256=digest.hexdigest(),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -470,6 +621,7 @@ def run_window(
     costs: TradingCosts,
     starting_balance: float = STARTING_BALANCE,
     risk_fraction: float = RISK_FRACTION,
+    research_context: object | None = None,
 ) -> WindowRun:
     """Run one evaluation window with the frozen warm-up and account rules.
 
@@ -498,6 +650,9 @@ def run_window(
             f"boundary, so warm-up is impossible"
         )
 
+    # A walk-forward window is an evaluation when the caller says so. The guard
+    # is enforced inside run_backtest; declaring it here propagates the same
+    # protection to every window of a declared research run.
     result = run_backtest(
         history,
         config=config,
@@ -505,6 +660,7 @@ def run_window(
         risk_fraction=risk_fraction,
         costs=costs,
         evaluation_start=resolved.eval_start_index,
+        research_context=research_context,
     )
 
     eval_start = candles[resolved.eval_start_index].timestamp
@@ -590,8 +746,9 @@ def walk_forward(
     windows: Sequence[WindowSpec] = PHASE13_WINDOWS,
     starting_balance: float = STARTING_BALANCE,
     risk_fraction: float = RISK_FRACTION,
+    research_context: object | None = None,
     validate: bool = True,
-    expected_fingerprint: tuple[int, datetime, datetime] | None = None,
+    expected_fingerprint: DatasetContentIdentity | None = None,
 ) -> tuple[WindowRun, ...]:
     """Run every frozen window for one pre-registered configuration.
 
@@ -626,6 +783,7 @@ def walk_forward(
             frozen_costs,
             starting_balance=starting_balance,
             risk_fraction=risk_fraction,
+            research_context=research_context,
         )
         runs.append(run)
 
@@ -718,6 +876,9 @@ __all__ = [
     "config_disclosure",
     "config_hash",
     "costs_hash",
+    "DATASET_FINGERPRINT_SCHEMA_VERSION",
+    "DatasetContentIdentity",
+    "DatasetContentIdentityError",
     "dataset_fingerprint",
     "phase13_costs",
     "resolve_windows",

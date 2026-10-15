@@ -253,7 +253,8 @@ def coerce_risk_fraction(value: object) -> float:
 
     if not isinstance(value, (int, float)):
         raise HighRiskError(
-            f"risk_fraction must be a number, got {type(value).__name__}"
+            "risk_fraction must be a number between 0 and 1, where 1 is the "
+            "whole paper account; a non-numeric value cannot express a size"
         )
 
     number = float(value)

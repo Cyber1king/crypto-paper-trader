@@ -350,7 +350,8 @@ def coerce_size_pct(value: object, config: ManualConfig | None = None) -> float:
 
     if not isinstance(value, (int, float)):
         raise ManualActionError(
-            f"size_pct must be a number, got {type(value).__name__}"
+            "size_pct must be a number between 0 and 1, where 1 is the whole "
+            "paper account; a non-numeric value cannot express a size"
         )
 
     number = float(value)

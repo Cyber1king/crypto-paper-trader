@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from .costs import FILL_PRICE, TradingCosts
+from .costs import FILL_PRICE, TradingCosts, market_cost_profile
 from .models import PaperTrade, Signal
 
 
@@ -38,9 +38,20 @@ class PaperBroker:
         if starting_balance <= 0:
             raise ValueError("starting balance must be positive")
 
+        # Every simulated fill in the engine is priced through this broker, so
+        # this is the one point no caller can route around. ``TradingCosts``
+        # validates its own market at construction, and re-checking here means
+        # an object that merely *looks* like a cost record -- a duck type, or a
+        # frozen dataclass written around ``frozen`` -- still cannot bring an
+        # unimplemented market into a simulation.
+        if costs is not None:
+            market_cost_profile(costs.market_type)
+
         self.starting_balance = starting_balance
         self.cash = starting_balance
-        self.costs = costs or TradingCosts()
+        # ``is not None`` rather than ``or``: a falsy-but-valid cost record
+        # must not be silently replaced by the defaults.
+        self.costs = costs if costs is not None else TradingCosts()
         self.open_trade: PaperTrade | None = None
         self.journal: list[PaperTrade] = []
 
