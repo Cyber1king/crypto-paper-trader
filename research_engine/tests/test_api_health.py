@@ -178,8 +178,18 @@ def test_only_the_permitted_routes_exist(client: TestClient) -> None:
     ``/api/daily-target``; Phase 24C added ``/api/daily-target/config`` so the user can
     choose the dollar target. Phase 25B added the three Manual routes - ``/api/manual``,
     ``/api/manual/action`` and ``/api/manual/cancel`` - so a user can request a paper
-    action and cancel one that has not filled. Any further route must be a conscious
-    decision with its own tests, not a by-product.
+    action and cancel one that has not filled.
+
+    Phase 49 added four **read-only** routes so the dashboard can display research
+    state from the engine instead of inferring it in the browser:
+    ``/api/research/instruments``, ``/api/research/governance``,
+    ``/api/research/providers`` and ``/api/research/evidence``. All four are
+    GET-only, take no body, expose no write path, and are covered by
+    ``test_research_api.py``, which also asserts that POST/PUT/DELETE/PATCH are
+    refused on every one of them.
+
+    Any further route must be a conscious decision with its own tests, not a
+    by-product.
     """
 
     paths = {
@@ -211,6 +221,13 @@ def test_only_the_permitted_routes_exist(client: TestClient) -> None:
         "/api/replay/pause",
         "/api/replay/step",
         "/api/replay/reset",
+        # Phase 49: read-only research status, so the dashboard displays what
+        # the engine records instead of inferring it in the browser. GET only --
+        # test_research_api.py asserts POST/PUT/DELETE/PATCH are refused.
+        "/api/research/instruments",
+        "/api/research/governance",
+        "/api/research/providers",
+        "/api/research/evidence",
     }
 
 
@@ -372,6 +389,23 @@ ALLOWED_ENGINE_IMPORTS = {
                      # bookkeeping and the single entry refusal. It holds no broker
                      # and no prices, and Daily Target reuses `replay` and `simulator`
                      # unchanged rather than importing a second executor
+    "researchguard", # Phase 40. assert_series_permitted - the research-integrity
+                     # gate on the data-loading path. It performs no calculation:
+                     # it fingerprints the candles already loaded and refuses a
+                     # protected series. It holds no broker, no prices and no
+                     # state, and it is the only reason the API can serve data
+                     # while still being subject to reservation rules. Adding it
+                     # is a deliberate extension of this allowlist, not a
+                     # relaxation: the module refuses, it never computes.
+    "ai_providers", # Phase 82. Provider contract + status. The API reads it to
+                      # report provider state truthfully, and nothing else. It
+                      # holds no broker, no prices, no positions and no engine
+                      # state; it imports no execution, registry or governance
+                      # module at all, which test_ai_providers.py asserts from
+                      # the import graph rather than trusting this comment.
+                      # Its transport is injected, so serving status cannot
+                      # open a connection. Like `researchguard` above, this is a
+                      # deliberate extension of the allowlist, not a relaxation.
 }
 
 

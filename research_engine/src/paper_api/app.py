@@ -48,6 +48,7 @@ from crypto_paper_lab.replay import (
     STATE_FINISHED,
 )
 from crypto_paper_lab.modes import (
+    STANDARD,
     DAILY_TARGET,
     DEFAULT_MODE,
     HIGH_RISK,
@@ -58,11 +59,20 @@ from crypto_paper_lab.modes import (
 )
 from crypto_paper_lab.walkforward import config_hash
 
-from . import marketdata, perfstats, signals
+from . import marketdata, perfstats, research_view, signals
 from .config import ApiConfig, config_from_env, SERVICE_NAME
 from .moderegistry import ModeRegistry
 from .replaysession import ReplaySession
 from .schemas import (
+    ConsumedWindowModel,
+    EvidenceResponse,
+    EvidenceSourceModel,
+    GovernanceResponse,
+    InstrumentStatusModel,
+    InstrumentsResponse,
+    ProviderStatusModel,
+    ProvidersResponse,
+    ReservationModel,
     AccountResponse,
     AiStateResponse,
     CandleModel,
@@ -239,6 +249,7 @@ def create_app(
             metadata=MarketMetadataModel(
                 asset=config.asset,
                 timeframe=config.timeframe,
+                market_type=marketdata.MARKET_TYPE,
                 source=marketdata.SOURCE_LABEL,
                 dataset_sha256=marketdata.dataset_identity(),
                 dataset_candles=len(candles),
@@ -352,13 +363,39 @@ def create_app(
     @app.get(
         "/api/position", response_model=OpenPositionResponse, tags=["position"]
     )
-    def open_position() -> OpenPositionResponse:
+    def open_position(mode: str | None = None) -> OpenPositionResponse:
         """The open position, if any.
 
         No mark price and no unrealized P&L: the engine has no live price
         feed, so any current valuation here would be invented. Cost fields
         are omitted because the broker computes them only at close.
+
+        This route describes the **Standard** session only. It previously
+        accepted a ``mode`` query parameter it did not read, so a caller
+        asking for ``?mode=manual`` silently received Standard's position --
+        which showed an open position for a manual book that had in fact been
+        closed, while ``/api/manual`` and ``/api/replay?mode=manual`` both
+        correctly reported it flat. A silently wrong answer is worse than a
+        refusal, so a mode other than Standard is now refused with a pointer
+        to where mode-scoped position state actually lives.
         """
+
+        if mode is not None and mode != STANDARD:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "MODE_NOT_SERVED_HERE",
+                    "message": (
+                        f"/api/position describes the Standard session only and "
+                        f"was asked for {mode!r}. Read this mode's position from "
+                        f"/api/manual (open_position) for manual, or from "
+                        f"/api/replay?mode={mode} (has_open_position) for any "
+                        f"other mode. A position from another session is not "
+                        f"substituted here, because reporting it would look "
+                        f"like a real open position in the wrong book."
+                    ),
+                },
+            )
 
         state = paper_session.position
 
@@ -517,6 +554,118 @@ def create_app(
                 status_code=status,
                 detail={"code": exc.code, "message": str(exc)},
             ) from exc
+
+    # -----------------------------------------------------------------------
+    # Phase 49: read-only research status.
+    #
+    # Every route here is a GET with no body, no side effect and no write path.
+    # They exist so the dashboard displays what the Python engine actually knows
+    # rather than inferring research state in the browser. Authorization and
+    # eligibility decisions remain entirely in the engine: nothing here can
+    # approve an instrument, consume a window, or evaluate anything.
+    # -----------------------------------------------------------------------
+
+    @app.get(
+        "/api/research/instruments",
+        response_model=InstrumentsResponse,
+        tags=["research"],
+    )
+    def research_instruments() -> InstrumentsResponse:
+        """Every registered instrument with its real blocker.
+
+        A block without a stated reason would not be actionable, so
+        ``blocker`` is surfaced verbatim rather than summarised.
+
+        Returns 503 when the registry cannot be read. An unreadable registry must
+        not render as an empty instrument list, which would make blocked
+        instruments look absent.
+        """
+
+        try:
+            views = research_view.instruments_projection()
+        except research_view.ResearchProjectionError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail={"code": "RESEARCH_UNAVAILABLE", "message": str(exc)},
+            ) from exc
+
+        return InstrumentsResponse(
+            instruments=[InstrumentStatusModel(**v.as_record()) for v in views],
+            registered_count=len(views),
+            blocked_count=sum(1 for v in views if v.blocked),
+        )
+
+    @app.get(
+        "/api/research/governance",
+        response_model=GovernanceResponse,
+        tags=["research"],
+    )
+    def research_governance() -> GovernanceResponse:
+        """Reservation and consumed-window state from the registry.
+
+        A reserved window always reports ``evaluated: false``. This route cannot
+        mark a window evaluated, and has no parameter that would let it.
+        """
+
+        try:
+            view = research_view.governance_projection()
+        except research_view.ResearchProjectionError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail={"code": "RESEARCH_UNAVAILABLE", "message": str(exc)},
+            ) from exc
+
+        return GovernanceResponse(
+            reservations=[ReservationModel(**r.as_record()) for r in view.reservations],
+            consumed_windows=[
+                ConsumedWindowModel(**c.as_record()) for c in view.consumed_windows
+            ],
+            registry_version=view.registry_version,
+        )
+
+    @app.get(
+        "/api/research/providers",
+        response_model=ProvidersResponse,
+        tags=["research"],
+    )
+    def research_providers() -> ProvidersResponse:
+        """AI research provider integration status.
+
+        Deliberately performs **no** provider call, health check or credential
+        lookup: a status indicator must not generate network traffic, and its
+        value must not depend on a secret being present. ``credential_configured``
+        is a boolean; the credential itself never appears.
+        """
+
+        views = research_view.providers_projection()
+        return ProvidersResponse(
+            providers=[ProviderStatusModel(**v.as_record()) for v in views],
+            any_integrated=any(
+                v.integration_state == "INTEGRATED" for v in views
+            ),
+        )
+
+    @app.get("/api/research/evidence", response_model=EvidenceResponse, tags=["research"])
+    def research_evidence() -> EvidenceResponse:
+        """Research evidence status.
+
+        Returns a real 200 with ``available: false`` rather than a 404, so the
+        dashboard renders an honest unavailable panel instead of an error
+        boundary. No evidence is fabricated to fill it.
+        """
+
+        payload = research_view.evidence_projection()
+        return EvidenceResponse(
+            available=bool(payload["available"]),
+            state=str(payload["state"]),
+            pipeline=payload.get("pipeline"),
+            items=list(payload["items"]),
+            events=list(payload["events"]),
+            detail=str(payload["detail"]),
+            sources_evaluated=[
+                EvidenceSourceModel(**s) for s in payload["sources_evaluated"]
+            ],
+        )
 
     @app.get("/api/modes", response_model=ModesResponse, tags=["modes"])
     def available_modes() -> ModesResponse:

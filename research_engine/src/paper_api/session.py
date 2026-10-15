@@ -28,7 +28,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from uuid import uuid4
 
-from crypto_paper_lab.costs import TradingCosts
+from crypto_paper_lab.costs import TradingCosts, assert_costs_match_market
+from paper_api import marketdata
 from crypto_paper_lab.simulator import PaperBroker
 from crypto_paper_lab.strategy import StrategyConfig
 from crypto_paper_lab.walkforward import (
@@ -79,15 +80,37 @@ class StrategyIdentity:
 
 @dataclass(frozen=True)
 class ExecutionIdentity:
-    """Identity of the execution-cost model driving the session."""
+    """Identity of the execution-cost model driving the session.
+
+    Mirrors ``crypto_paper_lab.replay.ExecutionIdentity``. Constructed through
+    :meth:`from_costs` rather than field by field: a hand-written constructor
+    silently drops any field added later, which is how this class fell out of
+    step with the engine's cost record in the first place.
+    """
 
     execution_model: str
+    market_type: str
     fee_rate: float
     slippage_rate: float
     spread_rate: float
     costs_repr: str
     costs_hash: str
     risk_fraction: float
+
+    @classmethod
+    def from_costs(
+        cls, costs: TradingCosts, risk_fraction: float
+    ) -> "ExecutionIdentity":
+        return cls(
+            execution_model=costs.execution_model,
+            market_type=costs.market_type,
+            fee_rate=costs.fee_rate,
+            slippage_rate=costs.slippage_rate,
+            spread_rate=costs.spread_rate,
+            costs_repr=repr(costs),
+            costs_hash=costs_hash(costs),
+            risk_fraction=risk_fraction,
+        )
 
 
 @dataclass(frozen=True)
@@ -167,12 +190,21 @@ class PaperSession:
         broker: PaperBroker | None = None,
     ) -> None:
         self._service = service
+
+        # This package serves exactly one market and this module knows which:
+        # the dataset behind ``/api/market`` declares it. That is the only
+        # production site where a declared market and a cost model are both in
+        # hand, so it is where the two are checked against each other. Every
+        # other entry point is protected by the broker's own market check.
+        resolved_costs = costs if costs is not None else phase13_costs()
+        assert_costs_match_market(resolved_costs, marketdata.MARKET_TYPE)
+
         # An injected broker is a testability seam for controlled fixtures.
         # It must be fully populated by the engine itself; nothing here
         # fabricates a trade. Routes never receive a broker to mutate.
         self._broker = broker if broker is not None else PaperBroker(
             starting_balance=starting_balance,
-            costs=costs if costs is not None else phase13_costs(),
+            costs=resolved_costs,
         )
         self._config = config if config is not None else baseline_config()
         self._costs = self._broker.costs
@@ -289,14 +321,6 @@ class PaperSession:
                 config_repr=repr(self._config),
                 config_hash=config_hash(self._config),
             ),
-            execution=ExecutionIdentity(
-                execution_model=self._costs.execution_model,
-                fee_rate=self._costs.fee_rate,
-                slippage_rate=self._costs.slippage_rate,
-                spread_rate=self._costs.spread_rate,
-                costs_repr=repr(self._costs),
-                costs_hash=costs_hash(self._costs),
-                risk_fraction=RISK_FRACTION,
-            ),
-            has_open_position=self._broker.open_trade is not None,
+execution=ExecutionIdentity.from_costs(self._costs, RISK_FRACTION),
+              has_open_position=self._broker.open_trade is not None,
         )

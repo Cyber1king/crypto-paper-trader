@@ -112,6 +112,12 @@ class ExecutionIdentityModel(_Strict):
     """
 
     execution_model: Literal["cost_deduction", "fill_price"]
+    market_type: str = Field(
+        description="Which market this cost model describes. Present because a "
+                    "P&L is not interpretable without knowing whose spread and "
+                    "fee schedule produced it: crypto's registered spread "
+                    "assumption of 0.0 is not a claim about any other venue."
+    )
     fee_rate: float
     slippage_rate: float
     spread_rate: float = Field(
@@ -231,6 +237,14 @@ class MarketMetadataModel(_Strict):
 
     asset: str
     timeframe: str
+    market_type: str = Field(
+        description=(
+            "Which market this data is. Carried alongside the dataset digest "
+            "because a hash identifies bytes, not a market: the same figures "
+            "mean different things under a different cost or session model, "
+            "and only crypto_spot is implemented."
+        )
+    )
     source: str = Field(
         description="Provenance label. Never a filesystem path."
     )
@@ -1894,3 +1908,142 @@ class HighRiskStateResponse(_Strict):
             caution=state.caution,
             replay=ReplayStateResponse.from_state(state.replay, mode=HIGH_RISK_MODE),
         )
+
+
+# ---------------------------------------------------------------------------
+# Phase 49: read-only research status.
+#
+# These mirror paper_api.research_view projections. Every field is either a
+# verified fact from the registry or an explicit ``None`` meaning *not recorded*.
+# Nothing is inferred, and no credential or filesystem path appears in any model.
+# ---------------------------------------------------------------------------
+
+
+class InstrumentStatusModel(_Strict):
+    """One instrument from the research registry."""
+
+    instrument_id: str
+    market_type: str
+    venue: str | None = None
+    source_provider: str | None = None
+    timeframe: str | None = None
+    timeframes_available: list[str] = Field(default_factory=list)
+    volume_semantics: str | None = None
+    timestamp_convention: str | None = None
+    provenance_grade: str | None = None
+    licence_knowledge: str | None = None
+    bid_ask_available: bool | None = None
+    research_approval: str
+    blocked: bool
+    blocker: str | None = None
+    evaluation_supported: bool
+
+
+class InstrumentsResponse(_Strict):
+    """Every registered instrument, with its real blockers."""
+
+    instruments: list[InstrumentStatusModel]
+    #: Recorded so a reader can tell *nothing is registered* from *nothing is
+    #: approved*. They are very different states.
+    registered_count: int
+    blocked_count: int
+
+
+class ReservationModel(_Strict):
+    """One reserved evaluation window."""
+
+    reservation_id: str
+    instrument_id: str
+    dataset_sha256: str
+    timeframe: str
+    warmup_first: str | None = None
+    warmup_last: str | None = None
+    evaluation_first: str | None = None
+    evaluation_last: str | None = None
+    evaluation_bars: int | None = None
+    status: str
+    state: str
+    used: bool
+    preregistration_id: str | None = None
+    note: str | None = None
+    #: Always False. No window in this project has produced a research result.
+    evaluated: bool
+
+
+class ConsumedWindowModel(_Strict):
+    """A permanently retired evaluation window."""
+
+    instrument_id: str
+    dataset_sha256: str
+    timeframe: str
+    evaluation_first: str | None = None
+    evaluation_last: str | None = None
+    evaluation_bars: int | None = None
+    consumed_on: str | None = None
+    outcome: str | None = None
+    preregistration_id: str | None = None
+    note: str | None = None
+    retired: bool
+
+
+class GovernanceResponse(_Strict):
+    """Reservation and consumption state, from the authoritative registry."""
+
+    reservations: list[ReservationModel]
+    consumed_windows: list[ConsumedWindowModel]
+    registry_version: int | None = None
+
+
+class ProviderStatusModel(_Strict):
+    """AI research provider integration status.
+
+    ``integration_state`` distinguishes *not implemented* from *configured but
+    failing*, which a boolean would conflate.
+
+    There is no field reporting whether a key is present. This service never
+    reads the environment, so it could not answer honestly.
+    """
+
+    provider: str
+    integration_state: str
+    documentation_verified: bool
+    detail: str
+
+
+class ProvidersResponse(_Strict):
+    """Provider status. No provider is contacted to produce this."""
+
+    providers: list[ProviderStatusModel]
+    #: False while no provider is integrated. Lets the dashboard state the
+    #: position once, rather than inferring it from an empty list.
+    any_integrated: bool
+
+
+class EvidenceSourceModel(_Strict):
+    """A source whose documentation was verified, and why it is unusable."""
+
+    publisher: str
+    kind: str
+    documented: bool
+    usable_for_evaluation: bool
+    reason: str
+
+
+class EvidenceResponse(_Strict):
+    """Research evidence status.
+
+    ``available`` is False and ``items`` is empty because nothing is integrated.
+    Returned as a real response rather than a 404 so the dashboard renders an
+    honest unavailable panel instead of an error boundary.
+    """
+
+    available: bool
+    state: str
+    items: list[dict[str, object]]
+    events: list[dict[str, object]]
+    detail: str
+    #: What exists versus what does not, without claiming any news exists.
+    #: Optional and additive: a client written before this field keeps
+    #: reading the fields above unchanged.
+    pipeline: dict[str, object] | None = None
+    sources_evaluated: list[EvidenceSourceModel]
