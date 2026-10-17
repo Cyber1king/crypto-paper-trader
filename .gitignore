@@ -58,6 +58,21 @@ __pycache__/
 # experiments/phase10/extract_and_normalise.py)
 /research_engine/data/oos/raw/extracted/
 
+# Research datasets.
+#
+# These were untracked but NOT ignored, so a blanket `git add .` would have
+# staged them. Patterns are anchored to the two exact directories so no
+# unrelated path is affected.
+#
+# data/phase33 holds the reserved ETH series. It is subject to a preregistered
+# evaluation reservation and must never be published.
+/research_engine/data/phase33/
+
+# OOS dataset and raw archives. README.md documents the pipeline and stays
+# tracked; the negation must follow the ignore rule or it has no effect.
+/research_engine/data/oos/*
+!/research_engine/data/oos/README.md
+
 # Environment files
 # These may hold secrets, so they are never committed. Patterns are unanchored
 # and therefore match at any depth (repo root, research_engine/, artifacts/).
