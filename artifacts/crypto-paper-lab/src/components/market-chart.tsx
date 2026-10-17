@@ -321,6 +321,12 @@ export function MarketChart({
         ) : null}
         <span>·</span>
         <span>source: {market?.metadata.source ?? "—"}</span>
+        <span>·</span>
+        {/* Absent stays unknown. Defaulting to a market here would assert a
+            fact the backend never sent. */}
+        <span data-testid="chart-market-type">
+          market: {market?.metadata.market_type ?? "unknown"}
+        </span>
       </div>
     </Card>
   );
@@ -347,7 +353,15 @@ export function EngineConfigurationPanel({
     | {
         dataset?: { asset?: string; timeframe?: string; sha256?: string; candle_count?: number };
         strategy?: { config_repr?: string; config_hash?: string };
-        execution?: { execution_model?: string; fee_rate?: number; slippage_rate?: number; spread_rate?: number; risk_fraction?: number };
+        execution?: {
+    execution_model?: string;
+    /** Which market the cost model describes. Absent means unknown, never defaulted. */
+    market_type?: string | null;
+    fee_rate?: number;
+    slippage_rate?: number;
+    spread_rate?: number;
+    risk_fraction?: number;
+  };
       }
     | undefined;
 }) {
@@ -359,6 +373,16 @@ export function EngineConfigurationPanel({
     >
       <div className="p-4 grid grid-cols-2 lg:grid-cols-3 gap-x-6 gap-y-0.5">
         <ConfigRow label="Asset" value={replay?.dataset?.asset ?? "—"} testId="config-asset" />
+        {/* Only the cost market is shown here. The replay's dataset identity
+            deliberately carries no market field -- the persisted research
+            schema was left unchanged -- so the data market is reported by
+            /api/market and shown with the dataset, not invented here. */}
+        <ConfigRow
+          label="Cost market"
+          value={replay?.execution?.market_type ?? "unknown"}
+          hint="The market this fee and spread model was measured for"
+          testId="config-cost-market"
+        />
         <ConfigRow
           label="Timeframe"
           value={replay?.dataset?.timeframe ?? "—"}

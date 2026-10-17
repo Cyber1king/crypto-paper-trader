@@ -883,3 +883,95 @@ describe("loading and error states", () => {
     );
   });
 });
+// ---------------------------------------------------------------------------
+// Phase 103/104: market identity rendering
+//
+// Both market facts come from the backend and must be shown as the backend
+// states them. Neither may be defaulted to a market, because an absent field
+// means "unknown", not "crypto_spot".
+// ---------------------------------------------------------------------------
+
+describe("market identity is reported as the backend states it", () => {
+  it("shows the served dataset's market in Market & Data", async () => {
+    const { MarketChart } = await import("../components/market-chart");
+    const { getByTestId } = render(
+      <MarketChart market={MARKET} isLoading={false} error={null} signal={null} asset="BTC/USDT" timeframe="1h" />,
+    );
+    expect(getByTestId("chart-market-type").textContent).toMatch("crypto_spot");
+  });
+
+  it("renders unknown, not a default market, when the field is absent", async () => {
+    const { MarketChart } = await import("../components/market-chart");
+    const withoutMarket = {
+      ...MARKET,
+      metadata: { ...MARKET.metadata, market_type: undefined },
+    };
+    const { getByTestId } = render(
+      <MarketChart market={withoutMarket} isLoading={false} error={null} signal={null} asset="BTC/USDT" timeframe="1h" />,
+    );
+    const text = getByTestId("chart-market-type").textContent ?? "";
+    expect(text).toMatch("unknown");
+    expect(text).not.toMatch("crypto_spot");
+  });
+
+  it("renders unknown when the backend sends an explicit null", async () => {
+    const { MarketChart } = await import("../components/market-chart");
+    const nulled = {
+      ...MARKET,
+      metadata: { ...MARKET.metadata, market_type: null },
+    };
+    const { getByTestId } = render(
+      <MarketChart market={nulled} isLoading={false} error={null} signal={null} asset="BTC/USDT" timeframe="1h" />,
+    );
+    expect(getByTestId("chart-market-type").textContent).toMatch("unknown");
+  });
+
+  it("shows the cost-profile market in Risk & Integrity", async () => {
+    const { EngineConfigurationPanel } = await import("../components/market-chart");
+    const replay = {
+      ...REPLAY_IDLE,
+      execution: { ...REPLAY_IDLE.execution, market_type: "crypto_spot" },
+    };
+    const { getByTestId } = render(
+      <EngineConfigurationPanel replay={replay} />,
+    );
+    expect(getByTestId("config-cost-market").textContent).toMatch("crypto_spot");
+  });
+
+  it("does not claim a cost market the backend never sent", async () => {
+    const { EngineConfigurationPanel } = await import("../components/market-chart");
+    const { getByTestId } = render(<EngineConfigurationPanel replay={REPLAY_IDLE} />);
+    expect(getByTestId("config-cost-market").textContent).toMatch("unknown");
+  });
+
+  it("renders an unsupported market verbatim rather than hiding it", async () => {
+    const { EngineConfigurationPanel } = await import("../components/market-chart");
+    const replay = {
+      ...REPLAY_IDLE,
+      execution: { ...REPLAY_IDLE.execution, market_type: "crypto_perpetual" },
+    };
+    const { getByTestId } = render(
+      <EngineConfigurationPanel replay={replay} />,
+    );
+    // Shown, not sanitised: the backend would refuse such a market, and if one
+    // ever appeared the operator must see it rather than a reassuring default.
+    expect(getByTestId("config-cost-market").textContent).toMatch(
+      "crypto_perpetual",
+    );
+  });
+
+  it("stays available when the market request failed entirely", async () => {
+    const { MarketChart } = await import("../components/market-chart");
+    const { getByTestId } = render(
+      <MarketChart
+        market={undefined}
+        isLoading={false}
+        error={null}
+        signal={null}
+        asset="BTC/USDT"
+        timeframe="1h"
+      />,
+    );
+    expect(getByTestId("chart-market-type").textContent).toMatch("unknown");
+  });
+});

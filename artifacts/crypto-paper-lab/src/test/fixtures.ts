@@ -267,6 +267,7 @@ export const STATISTICS: StatisticsResponse = {
 export const MARKET: MarketResponse = {
   metadata: {
     asset: "BTC/USDT",
+      market_type: "crypto_spot",
     timeframe: "1h",
     source: "local-research-dataset",
     dataset_sha256: "201A3B15D50A791CB5BE2B755107C8303906C8FC3CA6B64E8377C9FC73BA016B",
