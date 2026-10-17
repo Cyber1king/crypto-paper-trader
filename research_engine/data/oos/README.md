@@ -1,5 +1,17 @@
 # Out-of-Sample Data (`data/oos/`)
 
+> **Licence / attribution.** Everything in this directory — the `.zip` archives
+> under `raw/`, the normalised `.csv` files, and the `.report.txt` /
+> `.provenance.txt` sidecars — derives from **Binance Vision**
+> (<https://data.binance.vision>) and is provided under **CC BY-NC-SA 4.0**
+> together with the Binance Vision Dataset Terms v1.0 (26 August 2026).
+> Permitted non-commercial uses include algorithmic historical backtesting for
+> personal, non-production research; **commercial use is excluded**. Redistribution
+> must attribute Binance Vision and remain under CC BY-NC-SA 4.0. The normalised
+> CSVs are derivative works and carry that share-alike obligation.
+> See `research_engine/README.md` and
+> `experiments/phase53/LICENCE_REMEDIATION_PLAN.md`.
+
 This directory holds **newly acquired** BTC/USDT hourly candles intended for
 future out-of-sample validation of:
 
