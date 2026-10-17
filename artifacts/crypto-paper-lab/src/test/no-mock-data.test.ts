@@ -74,6 +74,10 @@ const LIVE_FILES = [
   "components/alerts-panel.tsx",
   "components/market-chart.tsx",
   "pages/dashboard.tsx",
+  // Phase 49: added to this inventory deliberately, so the existing honesty
+  // guards scan the research panels too. A new file that escapes the guard
+  // would be exactly the silent omission this list exists to prevent.
+  "components/research-panels.tsx",
 ] as const;
 
 // ---------------------------------------------------------------------------

@@ -37,6 +37,13 @@ import { Beaker, ShieldAlert, Wifi, WifiOff } from "lucide-react";
 
 import { Badge } from "@/components/ui";
 import { ErrorPanel, LoadingPanel, PaperOnlyBanner, UnavailableModePanel } from "@/components/state";
+import {
+  EvidencePanel,
+  GovernancePanel,
+  InstrumentExplorer,
+  ProviderPanel,
+  ResearchOverviewPanel,
+} from "@/components/research-panels";
 import { ModeNote, ModeSelector } from "@/components/mode-selector";
 import { PaperControls, toRefusal } from "@/components/paper-controls";
 import { EngineConfigurationPanel, MarketChart } from "@/components/market-chart";
@@ -90,6 +97,10 @@ import {
   useStandardAccount,
   useStatistics,
   useTrades,
+  useResearchEvidence,
+  useResearchGovernance,
+  useResearchInstruments,
+  useResearchProviders,
 } from "@/lib/hooks";
 import { useQueryClient } from "@tanstack/react-query";
 
@@ -242,6 +253,13 @@ export function Dashboard() {
   const replayError = queryError(replay);
   const aiError = queryError(ai);
   const dailyError = queryError(daily);
+  // Phase 49: read-only research status. `retry: false` in the hooks, so a
+  // backend fault surfaces immediately instead of an endless spinner.
+  const researchInstruments = useResearchInstruments();
+  const researchGovernance = useResearchGovernance();
+  const researchProviders = useResearchProviders();
+  const researchEvidence = useResearchEvidence();
+
   const marketError = queryError(market);
 
   // `shrink-0` on every badge: each is `whitespace-nowrap inline-flex`, so as a flex
@@ -487,6 +505,53 @@ export function Dashboard() {
             asset={replay.data?.dataset.asset ?? ai.data?.replay.dataset.asset}
             timeframe={replay.data?.dataset.timeframe ?? ai.data?.replay.dataset.timeframe}
             onRetry={() => void market.refetch()}
+          />
+        </section>
+
+        {/*
+          Phase 49: research status.
+
+          Displayed only, from read-only endpoints. Every panel here renders
+          what the Python engine records; none of them can approve an
+          instrument, spend an evaluation window, or run an evaluation, and no
+          control is rendered that would suggest otherwise.
+        */}
+        <section aria-label="Research status" className="space-y-4">
+          <ResearchOverviewPanel
+            instruments={researchInstruments.data}
+            governance={researchGovernance.data}
+            providers={researchProviders.data}
+            evidence={researchEvidence.data}
+            state={{
+              instrumentsLoading: researchInstruments.isLoading,
+              instrumentsError: researchInstruments.isError,
+              governanceLoading: researchGovernance.isLoading,
+              governanceError: researchGovernance.isError,
+            }}
+          />
+
+          <InstrumentExplorer
+            instruments={researchInstruments.data?.instruments}
+            isLoading={researchInstruments.isLoading}
+            isError={researchInstruments.isError}
+          />
+
+          <GovernancePanel
+            governance={researchGovernance.data}
+            isLoading={researchGovernance.isLoading}
+            isError={researchGovernance.isError}
+          />
+
+          <ProviderPanel
+            providers={researchProviders.data}
+            isLoading={researchProviders.isLoading}
+            isError={researchProviders.isError}
+          />
+
+          <EvidencePanel
+            evidence={researchEvidence.data}
+            isLoading={researchEvidence.isLoading}
+            isError={researchEvidence.isError}
           />
         </section>
       </main>

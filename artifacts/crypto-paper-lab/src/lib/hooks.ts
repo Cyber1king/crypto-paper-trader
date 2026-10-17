@@ -56,6 +56,10 @@ import {
   type ReplayStatus,
   type StatisticsResponse,
   type StepQuery,
+  type ResearchEvidenceResponse,
+  type ResearchGovernanceResponse,
+  type ResearchInstrumentsResponse,
+  type ResearchProvidersResponse,
   type TradesResponse,
 } from "./api";
 
@@ -72,9 +76,78 @@ export const queryKeys = {
   trades: () => ["trades"] as const,
   statistics: () => ["statistics"] as const,
   market: (query: MarketQuery) => ["market", query] as const,
+  researchInstruments: () => ["research", "instruments"] as const,
+  researchGovernance: () => ["research", "governance"] as const,
+  researchProviders: () => ["research", "providers"] as const,
+  researchEvidence: () => ["research", "evidence"] as const,
 };
 
 /** The client the hooks use. Tests install a stub via `setDefaultApi`. */
+/**
+ * Phase 49: research-status queries.
+ *
+ * All four are read-only GETs with a long staleTime, because the registry
+ * changes only through an explicit governance act, never on a timer. `retry:
+ * false` so a backend fault surfaces immediately as an error rather than
+ * spinning ? a status indicator that retries forever is worse than one that
+ * admits it failed.
+ */
+export function useResearchInstruments(): UseQueryResult<
+  ResearchInstrumentsResponse,
+  ApiError
+> {
+  const api = usePaperApi();
+
+  return useQuery({
+    queryKey: queryKeys.researchInstruments(),
+    queryFn: ({ signal }) => api.getResearchInstruments(signal),
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
+}
+
+export function useResearchGovernance(): UseQueryResult<
+  ResearchGovernanceResponse,
+  ApiError
+> {
+  const api = usePaperApi();
+
+  return useQuery({
+    queryKey: queryKeys.researchGovernance(),
+    queryFn: ({ signal }) => api.getResearchGovernance(signal),
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
+}
+
+export function useResearchProviders(): UseQueryResult<
+  ResearchProvidersResponse,
+  ApiError
+> {
+  const api = usePaperApi();
+
+  return useQuery({
+    queryKey: queryKeys.researchProviders(),
+    queryFn: ({ signal }) => api.getResearchProviders(signal),
+    staleTime: 30 * 60_000,
+    retry: false,
+  });
+}
+
+export function useResearchEvidence(): UseQueryResult<
+  ResearchEvidenceResponse,
+  ApiError
+> {
+  const api = usePaperApi();
+
+  return useQuery({
+    queryKey: queryKeys.researchEvidence(),
+    queryFn: ({ signal }) => api.getResearchEvidence(signal),
+    staleTime: 30 * 60_000,
+    retry: false,
+  });
+}
+
 export function usePaperApi() {
   return getDefaultApi();
 }
