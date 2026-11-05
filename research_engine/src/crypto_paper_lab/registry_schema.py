@@ -51,14 +51,14 @@ __all__ = [
 MARKET_TYPES_BLOCKED = frozenset(
     {
         "forex_reference_rates",
-        "forex_spot",
+        
         "crypto_perpetual",
         "crypto_futures",
     }
 )
 
 #: Market types with an implemented validator in this repository.
-MARKET_TYPES_SUPPORTED = frozenset({"crypto_spot"})
+MARKET_TYPES_SUPPORTED = frozenset({"crypto_spot", "forex_spot"})
 
 #: Provenance evidence grade. ``A`` requires independently re-derived values,
 #: which is the only grade this repository has actually reached.
@@ -122,6 +122,8 @@ _RESERVATION_REQUIRED = (
     "evaluation_last",
     "status",
     "used",
+    "series_fingerprint",
+    "fingerprint_version",
 )
 
 _CONSUMED_REQUIRED = (
@@ -446,6 +448,33 @@ def _validate_reservation(entry: dict[str, Any], instruments: set[str]) -> None:
         raise RegistryMetadataError(
             f"{where}: status is USED but 'used' is false. The two fields "
             "contradict each other."
+        )
+
+    # Content-identity fields (Phase 46): verify series fingerprint and version.
+    # These are required for the new identity contract; legacy entries without
+    # series_fingerprint will be refused for evaluations that require it.
+    sf = str(entry.get("series_fingerprint", "")).strip()
+    if not sf:
+        raise RegistryMetadataError(
+            f"{where}: series_fingerprint is required for new reservations; "
+            "missing field means this entry uses the legacy contract and may not "
+            "be evaluated under the new identity terms."
+        )
+    if len(sf) != 64 or any(c not in "0123456789abcdef" for c in sf.lower()):
+        raise RegistryMetadataError(
+            f"{where}: series_fingerprint={sf!r} is not a valid SHA-256 hex digest."
+        )
+
+    fv = str(entry.get("fingerprint_version", "")).strip()
+    if not fv:
+        raise RegistryMetadataError(
+            f"{where}: fingerprint_version is required for new reservations."
+        )
+    if fv != "1":
+        raise RegistryMetadataError(
+            f"{where}: fingerprint_version={fv!r} is not supported. Only version "
+            "1 is implemented; other algorithms are refused rather than silently "
+            "treated as equivalent."
         )
 
 

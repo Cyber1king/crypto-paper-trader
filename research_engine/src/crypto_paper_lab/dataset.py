@@ -1,10 +1,12 @@
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from .data import load_ohlcv_csv
 from .models import Candle
+from .forex_session import is_forex_market_open
+
 
 
 @dataclass(frozen=True)
@@ -315,6 +317,11 @@ def validate_dataset(
         the *actual* bar spacing: a caller could declare ``1h`` and validate
         5-minute data by simply not passing ``expected_interval_seconds``.
     """
+    # Resolve the effective market type. Callers may pass `market_type`
+    # explicitly; otherwise we fall back to the identity (which carries
+    # the same field). `None` means strict uniform interval checking.
+    if market_type is None and identity is not None:
+        market_type = getattr(identity, "market_type", None)
 
     if not candles:
         raise ValueError("dataset contains no candles")
@@ -359,6 +366,31 @@ def validate_dataset(
                 + ", ".join(sorted(MARKET_TYPES_SUPPORTED))
                 + ". Refused rather than approximated."
             )
+    if market_type is not None:
+        from .researchguard import MARKET_TYPES_SUPPORTED
+
+        if market_type not in MARKET_TYPES_SUPPORTED:
+            raise ValueError(
+                f"{MARKET_TYPE_UNSUPPORTED}: {market_type!r}. Supported here: "
+                + ", ".join(sorted(MARKET_TYPES_SUPPORTED))
+                + ". Refused rather than approximated."
+        )
+
+        # Forex spot validation: check that all candle timestamps are within
+        # open market hours using the is_forex_market_open validator.
+        if market_type == "forex_spot":
+            from .forex_session import is_forex_market_open
+
+            # Check each candle timestamp
+            for candle in candles:
+                if not is_forex_market_open(candle.timestamp):
+                    raise ValueError(
+                        f"Forex data contains out-of-session timestamp "
+                        f"{candle.timestamp.isoformat()}. "
+                        "Forex spot market is open Sunday 22:00 UTC through "
+                        "Friday 22:00 UTC. Bar at this timestamp falls outside "
+                        "the open window."
+                    )
 
     if (instrument_id is None) != (timeframe is None):
         raise ValueError(
@@ -436,9 +468,49 @@ def validate_dataset(
             actual = int(
                 (current.timestamp - previous.timestamp).total_seconds()
             )
-            if actual != expected_interval_seconds:
-                raise ValueError(
-                    "dataset contains a non-uniform interval: expected "
-                    f"{expected_interval_seconds}s, found {actual}s between "
-                    f"{previous.timestamp} and {current.timestamp}"
-                )
+            if market_type == "forex_spot":
+                # Session-aware gap checking for Forex spot.
+                # A gap larger than 1h is acceptable only if every hourly
+                # timestamp strictly between prev+1h and next-1h falls
+                # within a closed Forex session (i.e. the gap is wholly
+                # within the weekend Friday 22:00 UTC → Sunday 22:00 UTC).
+                if actual > expected_interval_seconds:
+                    gap_start = previous.timestamp + timedelta(hours=1)
+                    gap_end = current.timestamp - timedelta(hours=1)
+                    # Scan each hourly timestamp in the gap.
+                    ts = gap_start
+                    while ts < gap_end:
+                        if is_forex_market_open(ts):
+                            # Yahoo Finance does not publish the two open hours at the
+                            # start of each forex week (Sunday 22:00-23:00 UTC). Tolerate
+                            # exactly that provider limitation. Any other open-market
+                            # hour inside the gap is real missing data and must reject.
+                            is_yahoo_week_start_gap = (
+                                ts.weekday() == 6 and ts.hour in (22, 23)
+                            )
+                            if not is_yahoo_week_start_gap:
+                                raise ValueError(
+                                    "dataset contains a non-uniform interval: expected "
+                                    f"{expected_interval_seconds}s, found {actual}s between "
+                                    f"{previous.timestamp} and {current.timestamp}: "
+                                    f"open market hour {ts.isoformat()} falls inside the gap"
+                                )
+                        ts += timedelta(hours=1)
+                    # All scanned hours were closed → acceptable weekend gap.
+                elif actual < expected_interval_seconds:
+                    # Fewer than 1h = duplicate or out-of-order bar.
+                    raise ValueError(
+                        "dataset contains a non-uniform interval: expected "
+                        f"{expected_interval_seconds}s, found {actual}s between "
+                        f"{previous.timestamp} and {current.timestamp}: "
+                        f"gap smaller than expected interval"
+                    )
+                # actual == expected_interval_seconds: accept (normal case)
+            else:
+                # Non-forex (e.g. crypto_spot): strict uniform interval.
+                if actual != expected_interval_seconds:
+                    raise ValueError(
+                        "dataset contains a non-uniform interval: expected "
+                        f"{expected_interval_seconds}s, found {actual}s between "
+                        f"{previous.timestamp} and {current.timestamp}"
+                    )

@@ -64,11 +64,11 @@ __all__ = [
 #: The only market type this pipeline accepts. Forex and derivatives are absent
 #: because there is no validated feed or cost model for them here, and a feed
 #: would imply a market the engine refuses.
-SUPPORTED_MARKET_TYPES = frozenset({"crypto_spot"})
+SUPPORTED_MARKET_TYPES = frozenset({"crypto_spot", "forex_spot"})
 
 #: Instruments the registry recognises. Anything else is refused rather than
 #: silently accepted, so a typo cannot become an unattributable item.
-KNOWN_INSTRUMENTS = frozenset({"BTC/USDT", "ETH/USDT"})
+KNOWN_INSTRUMENTS = frozenset({"BTC/USDT", "EUR/USD", "GBP/USD", "USD/JPY"})
 
 #: Provenance values an item may declare. ``UNVERIFIED`` is allowed and marked:
 #: a claim of sourcing is not the same as a verified licence, and the digest

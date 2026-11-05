@@ -84,7 +84,7 @@ VOLUME_SEMANTICS = frozenset(
 #:
 #: ``forex_spot`` is deliberately absent: no session, holiday or DST validator
 #: exists in this repository. Claiming otherwise would be false.
-MARKET_TYPES_SUPPORTED = frozenset({"crypto_spot"})
+MARKET_TYPES_SUPPORTED = frozenset({"crypto_spot", "forex_spot"})
 
 _REGISTRY_ENV = "CRYPTO_PAPER_LAB_RESEARCH_REGISTRY"
 _DEFAULT_REGISTRY = Path(__file__).resolve().parents[2] / "data" / "research_registry.json"

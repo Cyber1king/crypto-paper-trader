@@ -55,6 +55,7 @@ import {
   type ReplayState,
   type ReplayStatus,
   type StatisticsResponse,
+  type SignalResponse,
   type StepQuery,
   type ResearchEvidenceResponse,
   type ResearchGovernanceResponse,
@@ -67,7 +68,7 @@ import {
 export const queryKeys = {
   health: () => ["health"] as const,
   modes: () => ["modes"] as const,
-  replay: (mode: string | undefined) => ["replay", mode ?? "standard"] as const,
+  replay: (mode: string | undefined, instrument?: string) => ["replay", mode, instrument] as const,
   ai: () => ["ai"] as const,
   dailyTarget: () => ["daily-target"] as const,
   highRisk: () => ["high-risk"] as const,
@@ -75,7 +76,8 @@ export const queryKeys = {
   account: () => ["account"] as const,
   trades: () => ["trades"] as const,
   statistics: () => ["statistics"] as const,
-  market: (query: MarketQuery) => ["market", query] as const,
+  signal: (at?: string) => ["signal", at] as const,
+  market: (query: MarketQuery, instrument?: string) => ["market", query, instrument] as const,
   researchInstruments: () => ["research", "instruments"] as const,
   researchGovernance: () => ["research", "governance"] as const,
   researchProviders: () => ["research", "providers"] as const,
@@ -210,13 +212,14 @@ export function useSelectedMode(
  */
 export function useReplayState(
   mode: ModeInfo | undefined,
+  instrument: string | undefined,
 ): UseQueryResult<ReplayState, ApiError> {
   const api = usePaperApi();
   const enabled = Boolean(mode?.available && mode.supports_execution);
 
   return useQuery({
-    queryKey: queryKeys.replay(mode?.mode),
-    queryFn: ({ signal }) => api.getReplay(mode?.mode, signal),
+    queryKey: queryKeys.replay(mode?.mode, instrument),
+    queryFn: ({ signal }) => api.getReplay(mode?.mode, instrument, signal),
     enabled,
     retry: false,
   });
@@ -507,16 +510,26 @@ export function useStatistics(
  */
 export function useMarket(
   query: MarketQuery,
+  instrument: string | undefined,
   enabled = true,
 ): UseQueryResult<MarketResponse, ApiError> {
   const api = usePaperApi();
-  const key = queryKeys.market(query);
+  const key = queryKeys.market(query, instrument);
 
   return useQuery({
     queryKey: key,
-    queryFn: ({ signal }) => api.getMarket(query, signal),
+    queryFn: ({ signal }) => api.getMarket(query, instrument, signal),
     enabled,
     staleTime: 60_000,
+    retry: false,
+  });
+}
+
+export function useSignal(at: string | undefined): UseQueryResult<SignalResponse, ApiError> {
+  const api = usePaperApi();
+  return useQuery({
+    queryKey: queryKeys.signal(at),
+    queryFn: ({ signal }) => api.getSignal(at, signal),
     retry: false,
   });
 }
@@ -564,6 +577,7 @@ export interface ReplayControlOptions {
  */
 export function useReplayControls(
   mode: ModeInfo | undefined,
+  instrument: string | undefined,
   options: ReplayControlOptions = {},
 ): ReplayControl {
   const api = usePaperApi();
@@ -611,7 +625,7 @@ export function useReplayControls(
   const start = useMutation<ReplayState, ApiError, number | undefined>({
     mutationFn: (intervalMs?: number) => {
       requireEnabled();
-      return api.startReplay(modeId, intervalMs);
+      return api.startReplay(modeId, intervalMs, instrument);
     },
     onSuccess: adopt,
   });
@@ -619,7 +633,7 @@ export function useReplayControls(
   const pause = useMutation<ReplayState, ApiError, void>({
     mutationFn: () => {
       requireEnabled();
-      return api.pauseReplay(modeId);
+      return api.pauseReplay(modeId, instrument);
     },
     onSuccess: adopt,
   });
@@ -627,7 +641,7 @@ export function useReplayControls(
   const step = useMutation<ReplayState, ApiError, StepQuery | undefined>({
     mutationFn: (query?: StepQuery) => {
       requireEnabled();
-      return api.stepReplay(modeId, query?.count ?? 1);
+      return api.stepReplay(modeId, query?.count ?? 1, instrument);
     },
     onSuccess: adopt,
   });
@@ -635,7 +649,7 @@ export function useReplayControls(
   const reset = useMutation<ReplayState, ApiError, void>({
     mutationFn: () => {
       requireEnabled();
-      return api.resetReplay(modeId);
+      return api.resetReplay(modeId, instrument);
     },
     onSuccess: adopt,
   });

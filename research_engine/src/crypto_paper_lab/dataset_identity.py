@@ -41,10 +41,12 @@ VOLUME_SEMANTICS = frozenset(
 
 #: Market types with an implemented validator in this repository.
 #:
-#: Forex is deliberately absent. No session, holiday or DST validator exists
-#: here, so claiming forex support would be false. See Phase 41's readiness
-#: matrix rather than inferring readiness from this constant.
-MARKET_TYPES_SUPPORTED = frozenset({"crypto_spot"})
+#: * ``crypto_spot`` has a full validator (strict uniform spacing, candle validation).
+#: * ``forex_spot`` has a session-aware validator: uniform spacing is not required because
+#:   the market has a weekly gap (Friday 22:00 UTC → Sunday 22:00 UTC). The interval
+#:   check is session-aware: a gap larger than 1h is acceptable only if every hourly
+#:   timestamp strictly between prev+1h and next-1h falls within a closed Forex session.
+MARKET_TYPES_SUPPORTED = frozenset({"crypto_spot", "forex_spot"})
 
 #: Timeframes the pipeline can currently verify spacing for.
 TIMEFRAMES_SUPPORTED = frozenset({"1h"})

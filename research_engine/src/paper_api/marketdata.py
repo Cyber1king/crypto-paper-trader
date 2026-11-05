@@ -93,7 +93,7 @@ def dataset_path() -> Path:
     return RESEARCH_ENGINE_ROOT / DATASET_PATH
 
 
-def served_dataset_identity() -> "object":
+def served_dataset_identity(dataset_path: "str | Path | None" = None) -> "object":
     """Declared identity for the served dataset, taken from the registry.
 
     ``validate_dataset_integrity`` proves *which* bytes are served: one fixed
@@ -118,20 +118,30 @@ def served_dataset_identity() -> "object":
 
     from crypto_paper_lab.researchguard import load_registry
 
-    return identity_for_dataset_path(DATASET_PATH, load_registry())
+    path = DATASET_PATH if dataset_path is None else Path(dataset_path)
+    return identity_for_dataset_path(path, load_registry())
 
 
 @lru_cache(maxsize=1)
-def load_research_candles() -> tuple:
+def load_research_candles(
+    dataset_path: "str | Path | None" = None,
+    market_type: "str | None" = None,
+) -> tuple:
     """Load, verify and cache the research candles for this process.
 
     Raises on a missing file, a hash mismatch, a wrong candle count, a
     timestamp ordering problem, incorrect candle spacing, or a dataset that does
     not match its declared identity. There is no fallback: a dataset that
     cannot be verified is not served.
+
+    If ``dataset_path`` is provided, it will be used directly; otherwise the
+    default frozen dataset path from the registry is loaded.
     """
 
-    path = dataset_path()
+    if dataset_path is not None:
+        path = Path(dataset_path)
+    else:
+        path = RESEARCH_ENGINE_ROOT / DATASET_PATH
     candles, _summary = load_dataset(path)
 
     # Declared-identity gate (D2b).
@@ -140,7 +150,11 @@ def load_research_candles() -> tuple:
     # more meaningful one: it refuses a series that is internally malformed or
     # that contradicts what the registry says it is. ``validate_dataset_integrity``
     # below then proves the bytes are the expected ones.
-    validate_dataset(candles, identity=served_dataset_identity())
+    validate_dataset(
+        candles,
+        identity=served_dataset_identity(dataset_path),
+        market_type=market_type,
+    )
 
     # Research-integrity gate (Phase 40).
     #
@@ -166,7 +180,8 @@ def load_research_candles() -> tuple:
     # Full integrity check: hash, declared bounds and count, strict ordering,
     # exact 1h spacing. Measured at ~8 ms, so running it once per process is
     # effectively free and removes any doubt about what is being served.
-    validate_dataset_integrity(candles, path=path)
+    if market_type is None or market_type == "crypto_spot":
+        validate_dataset_integrity(candles, path=path)
 
     return tuple(candles)
 

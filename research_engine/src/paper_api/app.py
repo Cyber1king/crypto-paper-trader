@@ -110,7 +110,7 @@ HEALTH_RESPONSE: dict[str, str] = {
     "service": "crypto-paper-lab",
 }
 
-#: Upper bound on a single ``/api/replay/step`` batch. Matches Phase 17A §4.2.
+#: Upper bound on a single ``/api/replay/step`` batch. Matches Phase 17A Ã‚Â§4.2.
 #: A batch is N calls to the engine's own step, so this bounds work per request
 #: rather than changing behaviour.
 MAX_STEP_COUNT = 5000
@@ -157,7 +157,23 @@ def create_app(
     # rebinding rather than replacing is what keeps their account view current.
     # They describe Standard: the Phase 16 routes carry no mode parameter, and
     # /api/replay with no parameter also selects Standard, so the two agree.
-    paper_session = session or mode_registry.paper_session()
+    # Lazy session resolution. Importing this module must not construct the
+    # Standard session or load the research dataset: the registry is still
+    # validated strictly, but only when a route actually needs a session.
+    # Injected sessions remain authoritative and are returned verbatim so
+    # existing test contracts (identity, rebinding) are preserved.
+    _injected_session = session
+
+    def _resolve_standard_session():
+        if _injected_session is not None:
+            return _injected_session
+        # ModeRegistry.session() is already lazy and idempotent, and it is the
+        # same object a reset rebinds in place. Resolve through it, never
+        # through .paper_session() or .standard_session(), so the Phase 16
+        # routes continue to observe Standard after a rebinding reset.
+        if app.state.session is None:
+            app.state.session = mode_registry.session(DEFAULT_MODE).session
+        return app.state.session
 
     app = FastAPI(
         title="Crypto Paper Lab API",
@@ -170,10 +186,13 @@ def create_app(
 
     # Exposed for logging and for tests. Holds no secrets.
     app.state.config = resolved
-    app.state.session = paper_session
+    # Populated on first use by _resolve_standard_session(), not here.
+    app.state.session = _injected_session
     app.state.modes = mode_registry
-    # The Standard mode's session, kept for continuity with Phase 17D callers.
-    app.state.replay = mode_registry.standard_session()
+    # Standard's replay, if the caller injected one. Otherwise it is resolved
+    # lazily by the /api/replay handler through mode_registry.session(). Kept
+    # as None here so importing this module never touches the registry.
+    app.state.replay = replay
 
     @app.get("/healthz", tags=["health"])
     def healthz() -> dict[str, str]:
@@ -195,6 +214,7 @@ def create_app(
         here. No balance, position or P&L is calculated inside the API layer.
         """
 
+        paper_session = _resolve_standard_session()
         return SessionResponse.from_view(paper_session.view)
 
     @app.get("/api/market", response_model=MarketResponse, tags=["market"])
@@ -220,6 +240,9 @@ def create_app(
                 "more candles match, the most recent slice is returned."
             ),
         ),
+        instrument: str | None = Query(
+            default=None, description="Instrument/market identifier. Omit for BTC/USDT."
+        ),
     ) -> MarketResponse:
         """Historical OHLCV candles from the frozen research dataset.
 
@@ -238,20 +261,55 @@ def create_app(
                 detail="start must be earlier than or equal to end",
             )
 
-        candles = marketdata.load_research_candles()
+        # Load the correct dataset based on the instrument parameter
+        dataset_path = None
+        market_type = None
+        if instrument is not None:
+            from crypto_paper_lab.researchguard import load_registry, _instrument_entry, ResearchGuardError
+
+            reg = load_registry()
+            try:
+                inst = _instrument_entry(reg, instrument)
+                dataset_path = inst.get("dataset_path")
+                market_type = inst.get("market_type")
+            except ResearchGuardError:
+                raise HTTPException(
+                    status_code=404,
+                    detail={"code": "UNKNOWN_INSTRUMENT", "message": f"Instrument {instrument!r} is not registered"},
+                )
+        
+        candles = marketdata.load_research_candles(dataset_path, market_type=market_type)
         selected, truncated = marketdata.select_candles(
             candles, start, end, limit
         )
 
-        config = paper_session.config
+        # Build metadata from the requested instrument, not from a BTC session.
+        if instrument is not None:
+            meta_asset = inst.get("symbol_normalized") or instrument
+            meta_timeframe = inst.get("timeframe") or "1h"
+            meta_market_type = inst.get("market_type") or "crypto_spot"
+            meta_sha256 = None
+            for window in reg.get("consumed_windows") or []:
+                if window.get("dataset_path") == dataset_path and window.get("dataset_sha256"):
+                    meta_sha256 = str(window["dataset_sha256"])
+                    break
+            if meta_sha256 is None:
+                meta_sha256 = marketdata.dataset_identity()
+        else:
+            paper_session = _resolve_standard_session()
+            config = paper_session.config
+            meta_asset = config.asset
+            meta_timeframe = config.timeframe
+            meta_market_type = marketdata.MARKET_TYPE
+            meta_sha256 = marketdata.dataset_identity()
 
         return MarketResponse(
             metadata=MarketMetadataModel(
-                asset=config.asset,
-                timeframe=config.timeframe,
-                market_type=marketdata.MARKET_TYPE,
+                asset=meta_asset,
+                timeframe=meta_timeframe,
+                market_type=meta_market_type,
                 source=marketdata.SOURCE_LABEL,
-                dataset_sha256=marketdata.dataset_identity(),
+                dataset_sha256=meta_sha256,
                 dataset_candles=len(candles),
                 dataset_first_timestamp=marketdata.as_utc(candles[0].timestamp),
                 dataset_last_timestamp=marketdata.as_utc(candles[-1].timestamp),
@@ -292,8 +350,9 @@ def create_app(
         reimplements no part of the strategy.
         """
 
+        paper_session = _resolve_standard_session()
         config = paper_session.config
-        candles = marketdata.load_research_candles()
+        candles = marketdata.load_research_candles(market_type="crypto_spot")
 
         try:
             signal = signals.resolve_signal(
@@ -351,6 +410,7 @@ def create_app(
         represents none of them.
         """
 
+        paper_session = _resolve_standard_session()
         state = paper_session.account
 
         return AccountResponse(
@@ -397,6 +457,7 @@ def create_app(
                 },
             )
 
+        paper_session = _resolve_standard_session()
         state = paper_session.position
 
         if state is None:
@@ -431,6 +492,7 @@ def create_app(
         invented for a journal this size, and no trade is ever fabricated.
         """
 
+        paper_session = _resolve_standard_session()
         trades = [
             TradeResponse(
                 side=trade.side,
@@ -486,6 +548,7 @@ def create_app(
         state, not a fault: there is nothing to summarise yet.
         """
 
+        paper_session = _resolve_standard_session()
         view = paper_session.view
         summary = perfstats.summarise(
             paper_session.trades,
@@ -532,7 +595,7 @@ def create_app(
 
         return DEFAULT_MODE if mode is None else mode
 
-    def _session_of(mode: str | None) -> tuple:
+    def _session_of(mode: str | None, instrument: str | None = None) -> tuple:
         """Resolve a mode to its isolated session, or refuse with HTTP.
 
         An unknown mode and a reserved or brokerless mode are both refusals, but
@@ -543,7 +606,7 @@ def create_app(
         name = _mode_of(mode)
 
         try:
-            return name, mode_registry.session(name)
+            return name, mode_registry.session(name, instrument=instrument)
         except ModeError as exc:
             status = (
                 422
@@ -1090,10 +1153,16 @@ def create_app(
             default=None,
             description="Paper mode. Omit for Standard.",
         ),
+        instrument: str | None = Query(
+            default=None, description="Instrument/market identifier. Omit for BTC/USDT.",
+        ),
     ) -> ReplayStateResponse:
-        """Authoritative replay state for one mode, read from ``Replay.state``."""
+        """Authoritative replay state for one mode, read from ``Replay.state``.
 
-        name, view = _session_of(mode)
+        If ``instrument`` is provided, the corresponding dataset from the
+        registry is loaded so the replay uses the correct candle data.
+        """
+        name, view = _session_of(mode, instrument=instrument)
 
         return ReplayStateResponse.from_state(view.snapshot(), mode=name)
 
@@ -1111,6 +1180,9 @@ def create_app(
         ),
         mode: str | None = Query(
             default=None, description="Paper mode. Omit for Standard."
+        ),
+        instrument: str | None = Query(
+            default=None, description="Instrument/market identifier. Omit for BTC/USDT."
         ),
     ) -> ReplayStateResponse:
         """Arm auto-run for one mode. Delegates to ``Replay.start()`` unchanged.
@@ -1146,6 +1218,9 @@ def create_app(
         mode: str | None = Query(
             default=None, description="Paper mode. Omit for Standard."
         ),
+        instrument: str | None = Query(
+            default=None, description="Instrument/market identifier. Omit for BTC/USDT."
+        ),
     ) -> ReplayStateResponse:
         """Disarm auto-run for one mode. Delegates to ``Replay.pause()``."""
 
@@ -1168,6 +1243,9 @@ def create_app(
         ),
         mode: str | None = Query(
             default=None, description="Paper mode. Omit for Standard."
+        ),
+        instrument: str | None = Query(
+            default=None, description="Instrument/market identifier. Omit for BTC/USDT."
         ),
     ) -> ReplayStateResponse:
         """Advance one mode's replay. Delegates to ``Replay.step()`` per bar.
@@ -1220,6 +1298,9 @@ def create_app(
         mode: str | None = Query(
             default=None, description="Paper mode. Omit for Standard."
         ),
+        instrument: str | None = Query(
+            default=None, description="Instrument/market identifier. Omit for BTC/USDT."
+        ),
     ) -> ReplayStateResponse:
         """Rewind one mode. Delegates to ``Replay.reset()`` unchanged.
 
@@ -1253,3 +1334,4 @@ def create_app(
 
 #: Module-level instance for ``uvicorn paper_api.app:app``.
 app = create_app()
+

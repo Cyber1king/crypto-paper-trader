@@ -81,6 +81,7 @@ export function MarketChart({
   signal,
   asset,
   timeframe,
+  instrument,
   onRetry,
 }: {
   market: MarketResponse | undefined;
@@ -89,6 +90,7 @@ export function MarketChart({
   signal: ReplaySignal | null | undefined;
   asset?: string;
   timeframe?: string;
+  instrument?: string;
   onRetry?: () => void;
 }) {
   const points = useMemo(() => toPoints(market), [market]);

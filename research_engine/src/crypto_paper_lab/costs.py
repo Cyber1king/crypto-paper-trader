@@ -122,7 +122,22 @@ MARKET_COST_PROFILES: Mapping[str, MarketCostProfile] = MappingProxyType({
             "evidence that Binance quotes a zero spread, and results "
             "sensitive to it should be read accordingly."
         ),
-    )
+    ),
+    "forex_spot": MarketCostProfile(
+        market_type="forex_spot",
+        fee_rate=0.0,
+        slippage_rate=0.0,
+        spread_rate=0.0,
+        execution_model=COST_DEDUCTION,
+        provenance="registered_assumption",
+        rationale=(
+            "Zero-cost research default. No verified FX spread or commission "
+            "schedule exists in this repository; carrying any non-zero value "
+            "would silently mis-cost every fill. Replace with broker-specific "
+            "MT5 profile before any live evaluation. Zeros are stated and "
+            "intentional, not an assumption that FX trading is free."
+        ),
+    ),
 })
 
 

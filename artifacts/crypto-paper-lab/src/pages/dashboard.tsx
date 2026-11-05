@@ -33,6 +33,7 @@
  */
 
 import { useCallback, useMemo, useState } from "react";
+import { MarketId, allMarkets, marketLabels } from "@/lib/markets";
 import { Beaker, ShieldAlert, Wifi, WifiOff } from "lucide-react";
 
 import { Badge } from "@/components/ui";
@@ -45,6 +46,7 @@ import {
   ResearchOverviewPanel,
 } from "@/components/research-panels";
 import { ModeNote, ModeSelector } from "@/components/mode-selector";
+import { MarketSelector } from "@/components/market-selector";
 import { PaperControls, toRefusal } from "@/components/paper-controls";
 import { EngineConfigurationPanel, MarketChart } from "@/components/market-chart";
 import {
@@ -111,6 +113,7 @@ export function Dashboard() {
   const queryClient = useQueryClient();
 
   const [selectedMode, setSelectedMode] = useState<string>("standard");
+  const [selectedMarket, setSelectedMarket] = useState<MarketId>("BTC/USDT");
   const [stepCount, setStepCount] = useState(1);
 
   const health = useHealth();
@@ -125,7 +128,7 @@ export function Dashboard() {
   const isHighRisk = mode?.mode === "high_risk";
 
   // Alerts and reserved modes issue no replay request at all.
-  const replay = useReplayState(isControllable ? mode : undefined);
+  const replay = useReplayState(isControllable ? mode : undefined, selectedMarket);
 
   const ai = useAiState(isAi);
 
@@ -166,7 +169,7 @@ export function Dashboard() {
       : { limit: CHART_LIMIT };
   }, [replay.data?.current_timestamp, ai.data?.replay.current_timestamp]);
 
-  const market = useMarket(chartQuery);
+  const market = useMarket(chartQuery, selectedMarket);
 
   // Poll only while a replay is armed, so an idle dashboard makes no requests.
   const replayStatus = replay.data?.status ?? ai.data?.replay.status;
@@ -213,7 +216,7 @@ export function Dashboard() {
     alsoRefresh: refreshKeys,
   });
 
-  const controls = useReplayControls(isControllable ? mode : undefined, {
+  const controls = useReplayControls(isControllable ? mode : undefined, selectedMarket, {
     alsoRefresh: refreshKeys,
   });
 
@@ -330,6 +333,7 @@ export function Dashboard() {
          */}
         <div className="flex items-center gap-4 min-w-0 shrink">
           {healthBadge}
+          <MarketSelector defaultMarket={selectedMarket} onChange={setSelectedMarket} />
           {StandardHeaderBalance(mode, replay.data, account.data)}
         </div>
       </header>
@@ -504,6 +508,7 @@ export function Dashboard() {
             signal={replay.data?.last_signal ?? ai.data?.replay.last_signal ?? null}
             asset={replay.data?.dataset.asset ?? ai.data?.replay.dataset.asset}
             timeframe={replay.data?.dataset.timeframe ?? ai.data?.replay.dataset.timeframe}
+            instrument={selectedMarket as string}
             onRetry={() => void market.refetch()}
           />
         </section>
@@ -566,44 +571,83 @@ export function Dashboard() {
  * not be labelled Standard's balance. When Standard is not selected, no balance
  * appears here at all rather than another mode's figure wearing its name.
  */
+/** Get real account balance from localStorage (Money Management single source of truth). */
+function getRealAccountBalanceFromStorage(): number {
+  try {
+    const saved = localStorage.getItem("money-management:balance");
+    if (saved == null || saved === "" || saved === "—") return 0;
+    const cleaned = saved.replace(/[^\\d.-]/g, "");
+    const num = parseFloat(cleaned);
+    return isNaN(num) ? 0 : num;
+  } catch {
+    return 0;
+  }
+}
+
+/** Get reserved funds from localStorage (Money Management single source of truth). */
+function getReservedFromStorage(): number {
+  try {
+    const saved = localStorage.getItem("money-management:reserved");
+    if (saved == null || saved === "" || saved === "—") return 0;
+    const cleaned = saved.replace(/[^\\d.-]/g, "");
+    const num = parseFloat(cleaned);
+    return isNaN(num) ? 0 : num;
+  } catch {
+    return 0;
+  }
+}
+
+/** The header balance.
+ *
+ * Shown only for Standard, because the header has one slot and the AI account must
+ * not be labelled Standard's balance. When Standard is not selected, no balance
+ * appears here at all rather than another mode's figure wearing its name.
+ * The real account balance is the single source of truth, persisted via
+ * localStorage (money-management:balance). Reserved funds and available funds are
+ * calculated consistently: Available Funds = Real Account Balance - Reserved Funds.
+ */
 function StandardHeaderBalance(
   mode: ModeInfo | undefined,
   replay: { balance: number } | undefined,
   account: { balance: number } | undefined,
 ) {
+  const realBalance = getRealAccountBalanceFromStorage();
+  const reserved = getReservedFromStorage();
+  const available = realBalance - reserved;
+
   if (mode?.mode !== "standard") {
     return (
       <div className="text-right min-w-0" data-testid="header-no-balance">
         <div className="text-xs text-muted-foreground font-mono uppercase tracking-wider break-words">
-          Paper Balance
+          Real Account Balance
         </div>
-        <div className="font-mono text-xl font-bold tracking-tight text-muted-foreground">
-          —
+        <div className="font-mono text-xl font-bold tracking-tight text-primary">
+          {realBalance === undefined || isNaN(realBalance) ? "—" : realBalance.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
         </div>
         <div className="text-[10px] text-muted-foreground font-mono">
-          shown in the {mode?.label ?? "selected"} panel
+          — Reserved: {reserved === undefined || isNaN(reserved) ? "—" : reserved.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD
+          — Available: {available === undefined || isNaN(available) ? "—" : available.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD
         </div>
       </div>
     );
   }
 
-  const balance = replay?.balance ?? account?.balance;
+  const displayBalance = realBalance !== undefined && !isNaN(realBalance) ? realBalance : (replay?.balance ?? account?.balance);
 
   return (
     <div className="text-right min-w-0">
       <div className="text-xs text-muted-foreground font-mono uppercase tracking-wider break-words">
-        Paper Balance
+        Real Account Balance
       </div>
       <div
         className="font-mono text-xl font-bold tracking-tight text-primary"
         data-testid="header-balance"
       >
-        {balance === undefined
-          ? "—"
-          : balance.toLocaleString("en-US", {
-              minimumFractionDigits: 2,
-              maximumFractionDigits: 2,
-            })}
+        {displayBalance === undefined || isNaN(displayBalance) ? "—" : displayBalance.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+      </div>
+      <div className="text-xs text-muted-foreground">
+        — Reserved: {reserved === undefined || isNaN(reserved) ? "—" : reserved.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD
+        — Available: {available === undefined || isNaN(available) ? "—" : available.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD
       </div>
     </div>
   );
@@ -1043,4 +1087,3 @@ function HighRiskBody({
   );
 }
 
-export { describeError, isApiError };

@@ -268,6 +268,33 @@ export interface StatisticsResponse {
   readonly execution: ExecutionIdentity;
 }
 
+export interface SignalResponse {
+  readonly service: string;
+  readonly asset: string;
+  readonly timeframe: string;
+  readonly timestamp: string;
+  readonly signal: "long" | "short" | "flat";
+  readonly reason: string;
+  readonly price: number;
+  readonly support: number;
+  readonly resistance: number;
+  readonly trend: "up" | "down" | "sideways";
+  readonly breakout: boolean;
+  readonly retest: boolean;
+  readonly signal_close: number | null;
+  readonly trend_state: "up" | "down" | "sideways" | null;
+  readonly breakout_distance: number | null;
+  readonly retest_distance: number | null;
+  readonly realised_volatility: number | null;
+  readonly mean_range: number | null;
+  readonly strategy: { readonly config_hash: string; readonly config_repr: string };
+  readonly source: {
+    readonly dataset_sha256: string;
+    readonly dataset_first_timestamp: string;
+    readonly dataset_last_timestamp: string;
+  };
+}
+
 export interface Candle {
   readonly timestamp: string;
   readonly open: number;
@@ -1006,11 +1033,11 @@ export class PaperApi {
    * `mode` omitted selects Standard, matching the server's own default. Passing an
    * explicit mode is preferred in the UI so a request is self-describing.
    */
-  async getReplay(mode?: ModeName, signal?: AbortSignal): Promise<ReplayState> {
+  async getReplay(mode?: ModeName, instrument?: string, signal?: AbortSignal): Promise<ReplayState> {
     return this.request<ReplayState>(
       "GET",
       "/api/replay",
-      { mode },
+      { mode, instrument },
       signal,
     );
   }
@@ -1018,24 +1045,26 @@ export class PaperApi {
   async startReplay(
     mode: ModeName | undefined,
     intervalMs?: number,
+    instrument?: string,
     signal?: AbortSignal,
   ): Promise<ReplayState> {
     return this.request<ReplayState>(
       "POST",
       "/api/replay/start",
-      { mode, interval_ms: intervalMs },
+      { mode, interval_ms: intervalMs, instrument },
       signal,
     );
   }
 
   async pauseReplay(
     mode?: ModeName,
+    instrument?: string,
     signal?: AbortSignal,
   ): Promise<ReplayState> {
     return this.request<ReplayState>(
       "POST",
       "/api/replay/pause",
-      { mode },
+      { mode, instrument },
       signal,
     );
   }
@@ -1043,24 +1072,26 @@ export class PaperApi {
   async stepReplay(
     mode?: ModeName,
     count?: number,
+    instrument?: string,
     signal?: AbortSignal,
   ): Promise<ReplayState> {
     return this.request<ReplayState>(
       "POST",
       "/api/replay/step",
-      { mode, count },
+      { mode, count, instrument },
       signal,
     );
   }
 
   async resetReplay(
     mode?: ModeName,
+    instrument?: string,
     signal?: AbortSignal,
   ): Promise<ReplayState> {
     return this.request<ReplayState>(
       "POST",
       "/api/replay/reset",
-      { mode },
+      { mode, instrument },
       signal,
     );
   }
@@ -1252,12 +1283,17 @@ export class PaperApi {
     );
   }
 
+  async getSignal(at: string | undefined, signal?: AbortSignal): Promise<SignalResponse> {
+    return this.request<SignalResponse>("GET", "/api/signal", { at }, signal);
+  }
+
   /** Real candles from the frozen research dataset. Never synthesised. */
   async getMarket(
     query: MarketQuery = {},
+    instrument?: string,
     signal?: AbortSignal,
   ): Promise<MarketResponse> {
-    return this.request<MarketResponse>("GET", "/api/market", { ...query }, signal);
+    return this.request<MarketResponse>("GET", "/api/market", { ...query, instrument }, signal);
   }
 
   // -- internals ----------------------------------------------------------

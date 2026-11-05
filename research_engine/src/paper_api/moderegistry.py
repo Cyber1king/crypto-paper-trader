@@ -52,6 +52,8 @@ deciding would be a second accounting truth.
 """
 from __future__ import annotations
 
+from dataclasses import replace
+
 from crypto_paper_lab.ai_paper import AiAccountState, AiPaperBook, AiPaperConfig
 from crypto_paper_lab.daily_target import (
     DAILY_TARGET_POLICY,
@@ -59,6 +61,7 @@ from crypto_paper_lab.daily_target import (
     DailyTargetState,
     DailyTargetTracker,
 )
+from crypto_paper_lab.costs import TradingCosts
 from crypto_paper_lab.execution import AUTOMATIC_POLICY, IntelligencePolicy
 from crypto_paper_lab.high_risk import HighRiskConfig
 from crypto_paper_lab.intelligence import IntelligenceConfig
@@ -86,6 +89,31 @@ from .manualsession import ManualSession
 from .marketdata import dataset_identity, load_research_candles
 from .replaysession import ReplaySession
 from .session import PaperSession
+
+
+def _instrument_config(asset: str, timeframe: str):
+    return replace(baseline_config(), asset=asset, timeframe=timeframe)
+
+
+def _instrument_costs(market_type: str | None):
+    if market_type == "forex_spot":
+        return TradingCosts(
+            fee_rate=0.0,
+            slippage_rate=0.0,
+            spread_rate=0.0,
+            execution_model="cost_deduction",
+            market_type="forex_spot",
+        )
+    return phase13_costs()
+
+
+def _instrument_sha256(reg: dict | None, dataset_path: str | None) -> str:
+    if dataset_path is None or reg is None:
+        return dataset_identity()
+    for window in reg.get("consumed_windows") or []:
+        if window.get("dataset_path") == dataset_path and window.get("dataset_sha256"):
+            return str(window["dataset_sha256"])
+    return dataset_identity()
 
 __all__ = [
     "ALERTS",
@@ -473,7 +501,7 @@ class AiSession(ReplaySession):
             with self._lock:
                 if self._book is None:
                     self._book = AiPaperBook(
-                        load_research_candles(),
+                        load_research_candles(dataset_path),
                         config=AiPaperConfig(),
                         strategy=baseline_config(),
                         costs=phase13_costs(),
@@ -641,7 +669,7 @@ class ModeRegistry:
 
     # -- sessions -----------------------------------------------------------
 
-    def session(self, mode: str) -> ReplaySession:
+    def session(self, mode: str, instrument: str | None = None) -> ReplaySession:
         """The isolated session for ``mode``, created on first use.
 
         Raises for a reserved mode, and for a brokerless mode - Alerts has no
@@ -661,12 +689,13 @@ class ModeRegistry:
                 f"mode {mode!r} has no paper execution session: {spec.note}"
             )
 
-        existing = self._sessions.get(mode)
+        key = (mode, instrument)
+        existing = self._sessions.get(key)
         if existing is not None:
             return existing
 
-        session = self._build(mode)
-        self._sessions[mode] = session
+        session = self._build(mode, instrument)
+        self._sessions[key] = session
 
         return session
 
@@ -772,20 +801,42 @@ class ModeRegistry:
 
     # -- internals ----------------------------------------------------------
 
-    def _default_session(self, mode: str) -> ReplaySession:
+    def _default_session(self, mode: str, instrument: str | None = None) -> ReplaySession:
         """Build an isolated session for an executable mode.
 
         Each call constructs a brand-new ``Replay``, and therefore a brand-new
         ``PaperBroker``. Nothing is cloned, copied or shared between modes; the
         only shared object is the immutable candle tuple they all read.
+
+        If ``instrument`` is provided, the corresponding dataset from the
+        registry is loaded so the replay uses the correct candle data.
+        Otherwise the default frozen dataset is loaded.
         """
+
+        dataset_path = None
+        market_type = "crypto_spot"
+        asset = "BTC/USDT"
+        timeframe = "1h"
+        reg = None
+        if instrument is not None:
+            from crypto_paper_lab.researchguard import load_registry, _instrument_entry
+
+            reg = load_registry()
+            try:
+                inst = _instrument_entry(reg, instrument)
+                dataset_path = inst.get("dataset_path")
+                asset = inst.get("symbol_normalized") or instrument
+                timeframe = inst.get("timeframe") or "1h"
+                market_type = inst.get("market_type") or "crypto_spot"
+            except Exception:
+                pass  # fall back to default dataset
 
         if self.is_ai(mode):
             return AiSession(
                 Replay(
-                    load_research_candles(),
-                    config=baseline_config(),
-                    costs=phase13_costs(),
+                    load_research_candles(dataset_path, market_type=market_type),
+                    config=_instrument_config(asset, timeframe),
+                    costs=_instrument_costs(market_type),
                     # The policy still has to be passed, because it is what the
                     # replay asks before opening. IntelligencePolicy refuses every
                     # entry - its score gate is evaluated by the book, which owns
@@ -795,7 +846,7 @@ class ModeRegistry:
                         threshold=DEFAULT_THRESHOLD,
                         position_limit=DEFAULT_MAX_POSITIONS,
                     ),
-                    dataset_sha256=dataset_identity(),
+                    dataset_sha256=_instrument_sha256(reg, dataset_path),
                 )
             )
 
@@ -812,11 +863,11 @@ class ModeRegistry:
             # one the session steps.
             session.attach_replay(
                 Replay(
-                    load_research_candles(),
-                    config=baseline_config(),
-                    costs=phase13_costs(),
+                    load_research_candles(dataset_path, market_type=market_type),
+                    config=_instrument_config(asset, timeframe),
+                    costs=_instrument_costs(market_type),
                     policy=DAILY_TARGET_POLICY,
-                    dataset_sha256=dataset_identity(),
+                    dataset_sha256=_instrument_sha256(reg, dataset_path),
                     # Injected rather than imported, so the replay holds no reference
                     # to the tracker. Reads a **live** comparison against cash, not the
                     # tracker's latch, so a target crossed by this step's own close is
@@ -844,9 +895,9 @@ class ModeRegistry:
 
             session.attach_replay(
                 Replay(
-                    load_research_candles(),
-                    config=baseline_config(),
-                    costs=phase13_costs(),
+                    load_research_candles(dataset_path, market_type=market_type),
+                    config=_instrument_config(asset, timeframe),
+                    costs=_instrument_costs(market_type),
                     # Standard's own policy instance. High-Risk changes no
                     # decision, so it decides with the same object - which also
                     # makes "no HighRiskPolicy" structural rather than a claim.
@@ -855,7 +906,7 @@ class ModeRegistry:
                     # Standard's replay. Bounded by the broker's own <= 1.0 check,
                     # so exposure cannot exceed cash.
                     risk_fraction=session.risk_fraction,
-                    dataset_sha256=dataset_identity(),
+                    dataset_sha256=_instrument_sha256(reg, dataset_path),
                 )
             )
 
@@ -871,7 +922,7 @@ class ModeRegistry:
             # immutable, so handing the same object to both is shared *input* and not
             # shared state. ``load_research_candles`` is not called twice here: the
             # session is built first and given the tuple, then the replay is attached.
-            candles = load_research_candles()
+            candles = load_research_candles(dataset_path, market_type=market_type)
 
             session = ManualSession(
                 candles=tuple(candles),
@@ -880,14 +931,14 @@ class ModeRegistry:
             session.attach_replay(
                 Replay(
                     candles,
-                    config=baseline_config(),
-                    costs=phase13_costs(),
+                    config=_instrument_config(asset, timeframe),
+                    costs=_instrument_costs(market_type),
                     # ManualPolicy refuses both an entry and an exit, so this replay
                     # trades nothing on its own and every trade in the mode is the
                     # user's. See crypto_paper_lab.manual_paper for why
                     # DisabledPolicy cannot be used instead.
                     policy=MANUAL_POLICY,
-                    dataset_sha256=dataset_identity(),
+                    dataset_sha256=_instrument_sha256(reg, dataset_path),
                 )
             )
 
@@ -895,10 +946,10 @@ class ModeRegistry:
 
         return ReplaySession(
             Replay(
-                load_research_candles(),
-                config=baseline_config(),
-                costs=phase13_costs(),
+                load_research_candles(dataset_path, market_type=market_type),
+                config=_instrument_config(asset, timeframe),
+                costs=_instrument_costs(market_type),
                 policy=mode_policy(mode),
-                dataset_sha256=dataset_identity(),
+                dataset_sha256=_instrument_sha256(reg, dataset_path),
             )
         )
