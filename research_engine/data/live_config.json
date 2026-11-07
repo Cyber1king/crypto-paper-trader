@@ -1,0 +1,25 @@
+{
+  "_documentation": "Per-instrument live-trading permission. All instruments default to false. A true value here is required, but not sufficient, for a live order. LIVE_TRADING_ENABLED=true in the environment AND the instrument-specific flag being true AND the environment being testnet are all required. Production requires a fourth separate unlock.",
+  "_schema_version": 1,
+  "instruments": {
+    "BTC/USDT": {
+      "live_trading_permitted": false,
+      "environment": "testnet",
+      "note": "Paper only. Flip to true and set LIVE_TRADING_ENABLED=true to allow Binance Spot Testnet orders."
+    },
+    "EUR/USD": {
+      "live_trading_permitted": false,
+      "environment": "mt5_demo",
+      "note": "Paper only. MT5 adapter is not yet implemented."
+    },
+    "GBP/USD": {
+      "live_trading_permitted": false,
+      "environment": "mt5_demo",
+      "note": "Paper only. MT5 adapter is not yet implemented."
+    }
+  },
+  "global": {
+    "production_unlocked": false,
+    "note": "Setting this to true is a separate act from LIVE_TRADING_ENABLED. Production orders require both."
+  }
+}
