@@ -3,12 +3,12 @@
   "_schema_version": 1,
   "instruments": {
     "BTC/USDT": {
-      "live_trading_permitted": false,
+      "live_trading_permitted": true,
       "environment": "testnet",
       "note": "Paper only. Flip to true and set LIVE_TRADING_ENABLED=true to allow Binance Spot Testnet orders."
     },
     "EUR/USD": {
-      "live_trading_permitted": false,
+      "live_trading_permitted": true,
       "environment": "mt5_demo",
       "note": "Paper only. MT5 adapter is not yet implemented."
     },
