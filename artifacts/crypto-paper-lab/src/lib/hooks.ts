@@ -40,8 +40,10 @@ import {
 import {
   getDefaultApi,
   isApiError,
+  type AccountSnapshot,
   type AccountResponse,
   type AiState,
+  type BrokerStatusResponse,
   type DailyTargetResponse,
   type ApiError,
   type ManualAction,
@@ -62,6 +64,7 @@ import {
   type ResearchInstrumentsResponse,
   type ResearchProvidersResponse,
   type TradesResponse,
+  type Position,
 } from "./api";
 
 /** Query keys, centralised so an invalidation cannot miss one. */
@@ -82,6 +85,8 @@ export const queryKeys = {
   researchGovernance: () => ["research", "governance"] as const,
   researchProviders: () => ["research", "providers"] as const,
   researchEvidence: () => ["research", "evidence"] as const,
+  brokerBalance: (brokerName: string) => ["broker", brokerName, "balance"] as const,
+  brokerPositions: (brokerName: string) => ["broker", brokerName, "positions"] as const,
 };
 
 /** The client the hooks use. Tests install a stub via `setDefaultApi`. */
@@ -166,6 +171,32 @@ export function useHealth(): UseQueryResult<HealthResponse, ApiError> {
     queryFn: ({ signal }) => api.getHealth(signal),
     // Liveness is cheap and the banner reports it, but there is no value in
     // re-asking on an interval the user did not ask for.
+    staleTime: 15_000,
+    retry: false,
+  });
+}
+
+export function useBrokerBalance(
+  brokerName: string,
+): UseQueryResult<AccountSnapshot | BrokerStatusResponse, ApiError> {
+  const api = usePaperApi();
+
+  return useQuery({
+    queryKey: queryKeys.brokerBalance(brokerName),
+    queryFn: ({ signal }) => api.getBrokerBalance(brokerName, signal),
+    staleTime: 15_000,
+    retry: false,
+  });
+}
+
+export function useBrokerPositions(
+  brokerName: string,
+): UseQueryResult<Position[] | BrokerStatusResponse, ApiError> {
+  const api = usePaperApi();
+
+  return useQuery({
+    queryKey: queryKeys.brokerPositions(brokerName),
+    queryFn: ({ signal }) => api.getBrokerPositions(brokerName, signal),
     staleTime: 15_000,
     retry: false,
   });

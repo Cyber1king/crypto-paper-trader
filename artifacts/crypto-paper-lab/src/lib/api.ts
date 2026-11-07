@@ -209,6 +209,37 @@ export interface PositionResponse {
   readonly position: OpenPosition | null;
 }
 
+/** Read-only account snapshot returned by a broker endpoint. */
+export interface AccountSnapshot {
+  readonly broker: string;
+  readonly account_id: string;
+  readonly currency: string;
+  readonly balance: number;
+  readonly equity: number;
+  readonly free_margin: number;
+  readonly used_margin: number;
+  readonly leverage: number | null;
+  readonly timestamp: string;
+  readonly stale_since: string | null;
+}
+
+/** A broker endpoint refusal or unavailable status returned as HTTP 200. */
+export interface BrokerStatusResponse {
+  readonly status: "disabled" | "unavailable" | "error";
+  readonly reason: string;
+}
+
+/** Position shape returned by the read-only broker positions endpoint. */
+export interface Position {
+  readonly instrument: string;
+  readonly side: "long" | "short";
+  readonly quantity: number;
+  readonly entry_price: number;
+  readonly entry_time: string;
+  readonly unrealized_pnl: number | null;
+  readonly broker_position_id: string | null;
+}
+
 export interface ClosedTrade {
   readonly side: "long" | "short";
   readonly entry_time: string;
@@ -1259,6 +1290,30 @@ export class PaperApi {
 
   async getAccount(signal?: AbortSignal): Promise<AccountResponse> {
     return this.request<AccountResponse>("GET", "/api/account", undefined, signal);
+  }
+
+  async getBrokerBalance(
+    brokerName: string,
+    signal?: AbortSignal,
+  ): Promise<AccountSnapshot | BrokerStatusResponse> {
+    return this.request<AccountSnapshot | BrokerStatusResponse>(
+      "GET",
+      `/api/broker/${encodeURIComponent(brokerName)}/balance`,
+      undefined,
+      signal,
+    );
+  }
+
+  async getBrokerPositions(
+    brokerName: string,
+    signal?: AbortSignal,
+  ): Promise<Position[] | BrokerStatusResponse> {
+    return this.request<Position[] | BrokerStatusResponse>(
+      "GET",
+      `/api/broker/${encodeURIComponent(brokerName)}/positions`,
+      undefined,
+      signal,
+    );
   }
 
   async getPosition(signal?: AbortSignal): Promise<PositionResponse> {

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+import time
 from uuid import uuid4
 
 from .base import (
@@ -74,6 +75,27 @@ class MT5LiveBroker(LiveBroker):
             raise BrokerUnavailable(f"MT5 initialize failed: {exc}") from exc
         if not initialized:
             raise BrokerUnavailable(f"MT5 initialize failed: {self._mt5.last_error()}")
+
+    def _resolve_filling_mode(self, filling_raw: int) -> int:
+        """Convert the symbol's raw filling bitmask to an ORDER_FILLING_* constant.
+
+        Per MT5 Python API: SYMBOL_FILLING_FOK = 1, SYMBOL_FILLING_IOC = 2.
+        ORDER_FILLING_FOK = 0, ORDER_FILLING_IOC = 1, ORDER_FILLING_RETURN = 2.
+        """
+        SYMBOL_FILLING_FOK = 1
+        SYMBOL_FILLING_IOC = 2
+        if filling_raw & SYMBOL_FILLING_IOC:
+            return self._mt5.ORDER_FILLING_IOC
+        if filling_raw & SYMBOL_FILLING_FOK:
+            return self._mt5.ORDER_FILLING_FOK
+        return self._mt5.ORDER_FILLING_RETURN
+
+    def _sanitize_comment(self, raw: str) -> str:
+        """Strip characters MT5 rejects in order comments and truncate to 31 chars."""
+        if not raw:
+            return ""
+        allowed = "".join(c for c in raw if c.isalnum() or c in " _.")
+        return allowed[:31]
 
     def get_balance(self) -> AccountSnapshot:
         """Return a live account snapshot after the default-instrument gate passes."""
@@ -169,6 +191,24 @@ class MT5LiveBroker(LiveBroker):
             )
 
         self._ensure_mt5()
+        # Check if the symbol's market is currently open for trading.
+        tick = self._mt5.symbol_info_tick(symbol)
+        if tick is None or tick.time == 0:
+            raise OrderRejected(f"market closed for {symbol}: no current tick available")
+
+        tick_age_seconds = int(time.time()) - int(tick.time)
+        if tick_age_seconds > 300:   # 5 minutes — no fresh tick means market is closed
+            raise OrderRejected(
+                f"market closed for {symbol}: last tick is {tick_age_seconds}s old "
+                f"(>300s threshold). Forex may be closed for the weekend or off-hours."
+            )
+
+        # Additional check: symbol trade mode.
+        sym_info = self._mt5.symbol_info(symbol)
+        if sym_info is None:
+            raise OrderRejected(f"symbol {symbol} not found")
+        if sym_info.trade_mode not in (self._mt5.SYMBOL_TRADE_MODE_FULL,):
+            raise OrderRejected(f"market closed for {symbol}: trade_mode={sym_info.trade_mode}")
         try:
             symbol_info = self._mt5.symbol_info(symbol)
             if symbol_info is None or not symbol_info.visible:
@@ -201,13 +241,15 @@ class MT5LiveBroker(LiveBroker):
                 "symbol": symbol,
                 "volume": float(request.quantity),
                 "type": order_type,
-                "price": price,
+                "price": float(price),
                 "deviation": self.config.deviation_points,
                 "magic": self.config.magic,
-                "comment": request.client_order_id[:31],
+                "comment": self._sanitize_comment(request.comment or request.client_order_id),
                 "type_time": self._mt5.ORDER_TIME_GTC,
-                "type_filling": symbol_info.filling_mode,
+                "type_filling": self._resolve_filling_mode(symbol_info.filling_mode),
             }
+            if request.order_type == "limit":
+                mt5_request["type_filling"] = self._mt5.ORDER_FILLING_RETURN
             if request.stop_price is not None:
                 mt5_request["sl"] = float(request.stop_price)
             result = self._mt5.order_send(mt5_request)
@@ -217,7 +259,8 @@ class MT5LiveBroker(LiveBroker):
             raise BrokerUnavailable(str(exc)) from exc
 
         if result is None:
-            raise OrderRejected("order_send returned None")
+            error_code = self._mt5.last_error()
+            raise OrderRejected(f"order_send returned None; last_error={error_code}")
         if result.retcode != self._mt5.TRADE_RETCODE_DONE:
             raise OrderRejected(f"MT5 retcode {result.retcode}: {result.comment}")
         return OrderResult(
@@ -322,9 +365,11 @@ class MT5LiveBroker(LiveBroker):
                 "price": close_price,
                 "deviation": self.config.deviation_points,
                 "magic": self.config.magic,
-                "comment": f"close-{client_order_id}"[:31],
+                "comment": self._sanitize_comment(f"close {client_order_id}"),
                 "type_time": self._mt5.ORDER_TIME_GTC,
-                "type_filling": self._mt5.symbol_info(symbol).filling_mode,
+                "type_filling": self._resolve_filling_mode(
+                    self._mt5.symbol_info(symbol).filling_mode
+                ),
             }
             result = self._mt5.order_send(close_request)
         except BrokerUnavailable:

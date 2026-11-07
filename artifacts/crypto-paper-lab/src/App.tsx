@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AppShell } from '@/components/app-shell';
 import { Dashboard } from '@/pages/dashboard';
+import { Brokers } from '@/pages/brokers';
 import { Journal } from '@/pages/journal';
 import { Market } from '@/pages/market';
 import { Portfolio } from '@/pages/portfolio';
@@ -27,6 +28,7 @@ function App() {
             <Route path="/market" component={Market} />
             <Route path="/money-management" component={MoneyManagement} />
             <Route path="/portfolio" component={Portfolio} />
+            <Route path="/brokers" component={Brokers} />
             <Route path="/journal" component={Journal} />
             <Route path="/signals" component={Signals} />
             <Route path="/strategy" component={Strategy} />

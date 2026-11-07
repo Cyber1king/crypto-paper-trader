@@ -41,6 +41,16 @@ from __future__ import annotations
 from datetime import datetime
 
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.encoders import jsonable_encoder
+from paper_api.brokers.base import (
+    AccountSnapshot,
+    BrokerUnavailable,
+    LiveTradingDisabled,
+    OrderRejected,
+)
+from paper_api.brokers.binance_live import BinanceEnvironment, BinanceLiveBroker
+from paper_api.brokers.mt5_live import MT5LiveBroker
+from paper_api.brokers.paper_adapter import PaperBrokerAdapter
 
 from crypto_paper_lab.replay import (
     MAX_INTERVAL_MS,
@@ -175,6 +185,32 @@ def create_app(
             app.state.session = mode_registry.session(DEFAULT_MODE).session
         return app.state.session
 
+    def _broker_adapter(broker_name: str):
+        if broker_name == "paper":
+            standard_replay = replay or mode_registry.session(DEFAULT_MODE)
+            return PaperBrokerAdapter(standard_replay)
+        if broker_name == "mt5_demo":
+            return MT5LiveBroker()
+        if broker_name == "binance_testnet":
+            return BinanceLiveBroker(environment=BinanceEnvironment.TESTNET)
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"unknown broker {broker_name!r}; expected one of: "
+                "mt5_demo, binance_testnet, paper"
+            ),
+        )
+
+    def _broker_error_response(call):
+        try:
+            return jsonable_encoder(call())
+        except LiveTradingDisabled as exc:
+            return {"status": "disabled", "reason": str(exc)}
+        except BrokerUnavailable as exc:
+            return {"status": "unavailable", "reason": str(exc)}
+        except OrderRejected as exc:
+            return {"status": "error", "reason": str(exc)}
+
     app = FastAPI(
         title="Crypto Paper Lab API",
         version="0.1.0",
@@ -205,6 +241,18 @@ def create_app(
 
         # A fresh dict per call so a caller cannot mutate the shared constant.
         return dict(HEALTH_RESPONSE)
+
+    @app.get("/api/broker/{broker_name}/balance", tags=["broker"])
+    def broker_balance(broker_name: str):
+        """Read one broker's balance without submitting or changing orders."""
+        adapter = _broker_adapter(broker_name)
+        return _broker_error_response(adapter.get_balance)
+
+    @app.get("/api/broker/{broker_name}/positions", tags=["broker"])
+    def broker_positions(broker_name: str):
+        """Read broker positions without submitting or changing orders."""
+        adapter = _broker_adapter(broker_name)
+        return _broker_error_response(adapter.get_positions)
 
     @app.get("/api/session", response_model=SessionResponse, tags=["session"])
     def session_state() -> SessionResponse:
@@ -1193,7 +1241,7 @@ def create_app(
         than in the engine - which is what lets both documents hold at once.
         """
 
-        name, view = _session_of(mode)
+        name, view = _session_of(mode, instrument=instrument)
 
         if view.snapshot().status == STATE_FINISHED:
             raise HTTPException(
@@ -1224,7 +1272,7 @@ def create_app(
     ) -> ReplayStateResponse:
         """Disarm auto-run for one mode. Delegates to ``Replay.pause()``."""
 
-        name, view = _session_of(mode)
+        name, view = _session_of(mode, instrument=instrument)
 
         return ReplayStateResponse.from_state(view.pause(), mode=name)
 
@@ -1280,7 +1328,7 @@ def create_app(
         ``Replay.state``, which is what it has always been.
         """
 
-        name, view = _session_of(mode)
+        name, view = _session_of(mode, instrument=instrument)
         state = view.snapshot()
 
         remaining = max(state.dataset.candle_count - state.cursor, 0)
@@ -1325,7 +1373,7 @@ def create_app(
         rewind, not a reporting event.
         """
 
-        name, view = _session_of(mode)
+        name, view = _session_of(mode, instrument=instrument)
 
         return ReplayStateResponse.from_state(view.reset(), mode=name)
 

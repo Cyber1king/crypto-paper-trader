@@ -66,8 +66,11 @@ class BinanceLiveBroker(LiveBroker):
                 self._client = Client(
                     self.api_key,
                     self.api_secret,
-                    testnet=self.environment == BinanceEnvironment.TESTNET,
+                    testnet=True,
                 )
+                # Spot Testnet URL override
+                if self.environment == BinanceEnvironment.TESTNET:
+                    self._client.API_URL = 'https://testnet.binance.vision/api'
             except Exception as exc:
                 raise BrokerUnavailable(str(exc)) from exc
 
