@@ -104,8 +104,8 @@
       "consumed_windows": [],
       "research_note": "Hourly OHLCV for exploratory work. No preregistration exists; strategy evaluation must not proceed on this data until a preregistration is frozen.",
       "checksum_url_pattern": null,
-      "retrieval_endpoint": "query1.finance.yahoo.com",
-      "retrieval_endpoint_note": "Retrieved via yfinance from Yahoo Finance. Yahoo Finance is the retrieval path; it is not an exchange.",
+      "retrieval_endpoint": "MetaTrader 5",
+      "retrieval_endpoint_note": "Retrieved from MetaTrader 5 MetaQuotes-Demo H1 data; MetaTrader 5 is the retrieval platform, not an exchange.",
       "dataset_path": "data/EURUSD_1h_Cleaned.csv",
       "dataset_note": "Yahoo Finance does not publish Sunday 22:00-23:00 UTC bars at the start of each forex week. The replay therefore starts each week at Monday 00:00 UTC. This is a provider limitation, not data loss."
     },
@@ -147,8 +147,8 @@
       "consumed_windows": [],
       "research_note": "Hourly OHLCV for exploratory work. No preregistration exists; strategy evaluation must not proceed on this data until a preregistration is frozen.",
       "checksum_url_pattern": null,
-      "retrieval_endpoint": "query1.finance.yahoo.com",
-      "retrieval_endpoint_note": "Retrieved via yfinance from Yahoo Finance. Yahoo Finance is the retrieval path; it is not an exchange.",
+      "retrieval_endpoint": "MetaTrader 5",
+      "retrieval_endpoint_note": "Retrieved from MetaTrader 5 MetaQuotes-Demo H1 data; MetaTrader 5 is the retrieval platform, not an exchange.",
       "dataset_path": "data/GBPUSD_1h_Cleaned.csv",
       "dataset_note": "Yahoo Finance does not publish Sunday 22:00-23:00 UTC bars at the start of each forex week. The replay therefore starts each week at Monday 00:00 UTC. This is a provider limitation, not data loss."
     }
@@ -197,26 +197,26 @@
     {
       "instrument_id": "EUR/USD",
       "dataset_path": "data/EURUSD_1h_Cleaned.csv",
-      "dataset_sha256": "f1be3dae1abda2fcb01314de9f8643b1f0437a1953f9f0f3a8c0387bf40b0e72",
+      "dataset_sha256": "9be3e0ecae14d68c4c4539e8972731fe28afdc00ca3d6ff3d9d206a5eccaf4e1",
       "timeframe": "1h",
-      "evaluation_first": "2026-05-04T06:00:00",
-      "evaluation_last": "2026-10-30T21:00:00",
-      "consumed_on": "2026-11-05",
+      "evaluation_first": "2025-11-07T07:00:00",
+      "evaluation_last": "2026-11-06T23:00:00",
+      "consumed_on": "2026-11-07",
       "preregistration_id": null,
       "outcome": "inconclusive",
-      "note": "Yahoo Finance hourly EUR/USD data. Consumed for pipeline validation. Sunday 22:00-23:00 UTC bars are absent by provider limitation; the replay therefore starts each week at Monday 00:00 UTC."
+      "note": "MetaTrader 5 MetaQuotes-Demo H1 data. 6202 bars. Session-aware: no weekend gaps. Replaces the Yahoo Finance dataset."
     },
     {
       "instrument_id": "GBP/USD",
       "dataset_path": "data/GBPUSD_1h_Cleaned.csv",
-      "dataset_sha256": "8289cf32d10a163cc72e058b057cfeafc75e3f55970a73145054d30b2704ef6c",
+      "dataset_sha256": "12417f408109d8b449a0650b0855affe4ecc121c73b8c6dc9d647dd7d2ba464e",
       "timeframe": "1h",
-      "evaluation_first": "2026-05-04T06:00:00",
-      "evaluation_last": "2026-10-30T21:00:00",
-      "consumed_on": "2026-11-05",
+      "evaluation_first": "2025-11-07T07:00:00",
+      "evaluation_last": "2026-11-06T23:00:00",
+      "consumed_on": "2026-11-07",
       "preregistration_id": null,
       "outcome": "inconclusive",
-      "note": "Yahoo Finance hourly GBP/USD data. Consumed for pipeline validation. Sunday 22:00-23:00 UTC bars are absent by provider limitation; the replay therefore starts each week at Monday 00:00 UTC."
+      "note": "MetaTrader 5 MetaQuotes-Demo H1 data. 6200 bars. Session-aware: no weekend gaps. Replaces the Yahoo Finance dataset."
     }
   ]
 }

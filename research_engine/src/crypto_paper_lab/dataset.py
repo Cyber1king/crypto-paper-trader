@@ -290,6 +290,7 @@ def validate_dataset(
     instrument_id: str | None = None,
     timeframe: str | None = None,
     identity: "object | None" = None,
+    skip_session_check: bool = False,
 ) -> None:
     """Validate that a dataset is usable for historical research.
 
@@ -480,7 +481,7 @@ def validate_dataset(
                     # Scan each hourly timestamp in the gap.
                     ts = gap_start
                     while ts < gap_end:
-                        if is_forex_market_open(ts):
+                        if is_forex_market_open(ts) and not skip_session_check:
                             # Yahoo Finance does not publish the two open hours at the
                             # start of each forex week (Sunday 22:00-23:00 UTC). Tolerate
                             # exactly that provider limitation. Any other open-market

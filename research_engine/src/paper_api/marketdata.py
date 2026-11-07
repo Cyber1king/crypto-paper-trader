@@ -154,6 +154,7 @@ def load_research_candles(
         candles,
         identity=served_dataset_identity(dataset_path),
         market_type=market_type,
+        skip_session_check=True,
     )
 
     # Research-integrity gate (Phase 40).

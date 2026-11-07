@@ -20,6 +20,11 @@ from __future__ import annotations
 
 import datetime
 
+_FX_HOLIDAYS = {
+    (12, 25),  # Christmas Day
+    (1, 1),    # New Year's Day
+}
+
 
 def _clamp_to_utc(dt: datetime.datetime) -> datetime.datetime:
     """Ensure the datetime is UTC-aware and return as naive UTC."""
@@ -49,6 +54,9 @@ def is_forex_market_open(timestamp: datetime.datetime) -> bool:
         True if the market is open at the given time, False otherwise.
     """
     ts = _clamp_to_utc(timestamp)
+
+    if (ts.month, ts.day) in _FX_HOLIDAYS:
+        return False
 
     # Use the original timestamp's weekday to avoid issues with UTC conversion
     # getting mangled. The day-of-week is invariant under UTC conversion.

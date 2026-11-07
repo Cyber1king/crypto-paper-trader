@@ -212,6 +212,7 @@ export function Dashboard() {
   // would look frozen while claiming to be running (Phase 20).
   useAutoStep({
     mode: isControllable ? mode : undefined,
+    instrument: selectedMarket,
     status: replayStatus,
     alsoRefresh: refreshKeys,
   });

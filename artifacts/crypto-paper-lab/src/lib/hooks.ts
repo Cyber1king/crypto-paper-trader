@@ -599,7 +599,7 @@ export function useReplayControls(
    * server just handed over.
    */
   const adopt = async (state: ReplayState) => {
-    queryClient.setQueryData(queryKeys.replay(modeId), state);
+    queryClient.setQueryData(queryKeys.replay(modeId, instrument), state);
     await Promise.all(
       (options.alsoRefresh ?? []).map((key) =>
         queryClient.invalidateQueries({ queryKey: key }),
@@ -730,6 +730,8 @@ export const AUTO_STEP_BARS = 1;
 export interface AutoStepOptions {
   /** The mode whose replay is being driven. `undefined` disables the effect. */
   readonly mode: ModeInfo | undefined;
+  /** The instrument whose replay is being driven. */
+  readonly instrument: string | undefined;
   /** The server's status. Stepping happens only while this is `running`. */
   readonly status: ReplayStatus | undefined;
   /** Extra query keys to refresh after each successful tick. */
@@ -771,6 +773,7 @@ export interface AutoStepOptions {
  */
 export function useAutoStep({
   mode,
+  instrument,
   status,
   alsoRefresh,
 }: AutoStepOptions): void {
@@ -809,9 +812,9 @@ export function useAutoStep({
      * request for state the server just handed over.
      */
     const advance = async () => {
-      const state = await api.stepReplay(modeId, AUTO_STEP_BARS);
+      const state = await api.stepReplay(modeId, AUTO_STEP_BARS, instrument);
 
-      queryClient.setQueryData(queryKeys.replay(modeId), state);
+      queryClient.setQueryData(queryKeys.replay(modeId, instrument), state);
 
       await Promise.all(
         (refreshKeys.current ?? []).map((key) =>
@@ -855,7 +858,7 @@ export function useAutoStep({
       // by the previous one.
       halted.current = false;
     };
-  }, [api, enabled, modeId, queryClient, status]);
+  }, [api, enabled, instrument, modeId, queryClient, status]);
 }
 
 // ---------------------------------------------------------------------------
