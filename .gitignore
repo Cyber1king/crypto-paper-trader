@@ -81,3 +81,9 @@ __pycache__/
 .env
 .env.*
 !.env.example
+
+# Assistant chat history (user data, not code)
+research_engine/data/assistant_history.json
+
+# Codex / OpenCode auto-generated backups
+*.bak
