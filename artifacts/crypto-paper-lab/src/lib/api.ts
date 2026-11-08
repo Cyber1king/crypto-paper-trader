@@ -240,6 +240,31 @@ export interface Position {
   readonly broker_position_id: string | null;
 }
 
+export interface AssistantMessage {
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp?: string;
+  pending_action?: AssistantPendingAction | null;
+  tool_calls?: unknown[] | null;
+  confirmed?: boolean;
+  cancelled?: boolean;
+  confirm_error?: string | null;
+  confirm_result?: unknown;
+}
+
+export interface AssistantPendingAction {
+  confirmation_id: string;
+  tool_name: string;
+  args: Record<string, unknown>;
+  description?: string;
+  proposed_action?: Record<string, unknown>;
+}
+
+export interface AssistantChatResponse {
+  reply: string;
+  pending_action: AssistantPendingAction | null;
+}
+
 export interface ClosedTrade {
   readonly side: "long" | "short";
   readonly entry_time: string;
@@ -1351,6 +1376,45 @@ export class PaperApi {
     return this.request<MarketResponse>("GET", "/api/market", { ...query, instrument }, signal);
   }
 
+  async getAssistantHistory(signal?: AbortSignal): Promise<{ messages: AssistantMessage[] }> {
+    return this.request<{ messages: AssistantMessage[] }>(
+      "GET", "/api/assistant/history", undefined, signal,
+    );
+  }
+
+  async postAssistantHistory(
+    message: AssistantMessage,
+    signal?: AbortSignal,
+  ): Promise<{ ok: boolean }> {
+    return this.request<{ ok: boolean }>(
+      "POST", "/api/assistant/history", undefined, signal, message,
+    );
+  }
+
+  async clearAssistantHistory(signal?: AbortSignal): Promise<{ ok: boolean }> {
+    return this.request<{ ok: boolean }>(
+      "DELETE", "/api/assistant/history", undefined, signal,
+    );
+  }
+
+  async sendAssistantChat(
+    payload: { message: string; history?: AssistantMessage[] },
+    signal?: AbortSignal,
+  ): Promise<AssistantChatResponse> {
+    return this.request<AssistantChatResponse>(
+      "POST", "/api/assistant/chat", undefined, signal, payload,
+    );
+  }
+
+  async confirmAssistantAction(
+    payload: { confirmation_id: string; tool_name: string; args: Record<string, unknown> },
+    signal?: AbortSignal,
+  ): Promise<{ ok: boolean; data: unknown; error: string | null }> {
+    return this.request<{ ok: boolean; data: unknown; error: string | null }>(
+      "POST", "/api/assistant/confirm", undefined, signal, payload,
+    );
+  }
+
   // -- internals ----------------------------------------------------------
 
   private buildUrl(path: string, query?: Record<string, unknown>): string {
@@ -1368,7 +1432,7 @@ export class PaperApi {
   }
 
   private async request<T>(
-    method: "GET" | "POST",
+    method: "GET" | "POST" | "DELETE",
     path: string,
     query?: Record<string, unknown>,
     signal?: AbortSignal,

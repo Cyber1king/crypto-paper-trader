@@ -1417,6 +1417,40 @@ def create_app(
             "error": result.error,
         }
 
+    @app.get("/api/assistant/history", tags=["assistant"])
+    def assistant_history_get() -> dict:
+        """Read the persistent conversation history."""
+        from paper_api.assistant.history import load_history
+
+        return {"messages": load_history()}
+
+    @app.post("/api/assistant/history", tags=["assistant"])
+    def assistant_history_post(payload: dict) -> dict:
+        """Append one message to persistent history. Used by the frontend after each turn."""
+        from paper_api.assistant.history import append_message
+
+        role = str(payload.get("role") or "").strip()
+        content = str(payload.get("content") or "").strip()
+        if role not in ("user", "assistant"):
+            raise HTTPException(status_code=400, detail="role must be 'user' or 'assistant'")
+        if not content and not payload.get("pending_action"):
+            raise HTTPException(status_code=400, detail="content or pending_action is required")
+        append_message(
+            role=role,
+            content=content,
+            pending_action=payload.get("pending_action"),
+            tool_calls=payload.get("tool_calls"),
+        )
+        return {"ok": True}
+
+    @app.delete("/api/assistant/history", tags=["assistant"])
+    def assistant_history_delete() -> dict:
+        """Clear persistent conversation history."""
+        from paper_api.assistant.history import clear_history
+
+        clear_history()
+        return {"ok": True}
+
     return app
 
 

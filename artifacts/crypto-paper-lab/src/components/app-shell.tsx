@@ -8,6 +8,7 @@ import {
   LayoutDashboard,
   Link2,
   Menu,
+  MessageSquare,
   Radio,
   ShieldCheck,
   Settings,
@@ -15,6 +16,9 @@ import {
   X,
   type LucideIcon,
 } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { ThemeToggle } from '@/components/theme-toggle';
+import { useAssistant } from '@/lib/assistant-context';
 
 interface NavItem {
   readonly key: string;
@@ -102,6 +106,7 @@ function NavList({
 
 export function AppShell({ children }: { children: ReactNode }) {
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const assistant = useAssistant();
 
   // If the viewport grows past the mobile breakpoint while the drawer is open,
   // close it so the scroll lock and overlay do not outlive the mobile layout.
@@ -122,6 +127,20 @@ export function AppShell({ children }: { children: ReactNode }) {
       className="flex min-h-screen bg-background text-foreground font-sans"
       data-testid="app-shell"
     >
+      <div className="fixed right-3 top-2 z-20 flex items-center gap-1 rounded-lg border bg-card/95 p-1 shadow-sm backdrop-blur">
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          aria-label="Open assistant"
+          title="Open assistant"
+          onClick={assistant.toggle}
+        >
+          <MessageSquare aria-hidden="true" />
+        </Button>
+        <ThemeToggle />
+      </div>
+
       {/* Desktop: persistent sidebar */}
       <aside
         className="sticky top-0 hidden h-screen w-56 shrink-0 self-start overflow-y-auto border-r bg-card p-3 md:block"
