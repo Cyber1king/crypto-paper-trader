@@ -1397,6 +1397,26 @@ def create_app(
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         return result
 
+    @app.post("/api/assistant/confirm", tags=["assistant"])
+    def assistant_confirm(payload: dict) -> dict:
+        """Execute a previously proposed write action after user confirmation."""
+        from paper_api.assistant.tools import execute_confirmed
+
+        confirmation_id = str(payload.get("confirmation_id") or "").strip()
+        tool_name = str(payload.get("tool_name") or "").strip()
+        args = payload.get("args") or {}
+        if not confirmation_id or not tool_name or not isinstance(args, dict):
+            raise HTTPException(
+                status_code=400,
+                detail="confirmation_id, tool_name, and args are required",
+            )
+        result = execute_confirmed(confirmation_id, tool_name, args)
+        return {
+            "ok": result.ok,
+            "data": result.data,
+            "error": result.error,
+        }
+
     return app
 
 

@@ -8,8 +8,10 @@ proposal only; execution belongs to a separately confirmed Phase B operation.
 from __future__ import annotations
 
 import math
+import sys
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Callable, Literal
 from uuid import uuid4
 
@@ -54,6 +56,49 @@ ToolFunction = Callable[..., ToolResult]
 _TOOLS: dict[str, tuple[ToolSpec, ToolFunction]] = {}
 
 
+@dataclass
+class PendingConfirmation:
+    """A short-lived, single-use write proposal awaiting user confirmation."""
+
+    confirmation_id: str
+    tool_name: str
+    args: dict
+    created_at: float
+
+
+_PENDING_CONFIRMATIONS: dict[str, PendingConfirmation] = {}
+_PENDING_TTL_SECONDS: float = 300.0
+EXECUTION_LOG: list[tuple[datetime, str, str, dict, ToolResult]] = []
+
+
+def _prune_pending() -> None:
+    now = time.time()
+    stale = [
+        confirmation_id
+        for confirmation_id, pending in _PENDING_CONFIRMATIONS.items()
+        if now - pending.created_at > _PENDING_TTL_SECONDS
+    ]
+    for confirmation_id in stale:
+        del _PENDING_CONFIRMATIONS[confirmation_id]
+
+
+def store_pending(confirmation_id: str, tool_name: str, args: dict) -> None:
+    """Store a proposal for five minutes before it must be confirmed."""
+    _prune_pending()
+    _PENDING_CONFIRMATIONS[confirmation_id] = PendingConfirmation(
+        confirmation_id=confirmation_id,
+        tool_name=tool_name,
+        args=dict(args),
+        created_at=time.time(),
+    )
+
+
+def consume_pending(confirmation_id: str) -> PendingConfirmation | None:
+    """Remove and return a pending proposal, making confirmation single-use."""
+    _prune_pending()
+    return _PENDING_CONFIRMATIONS.pop(confirmation_id, None)
+
+
 def register_tool(spec: ToolSpec, fn: ToolFunction) -> None:
     """Register or replace a tool by its public name."""
     _TOOLS[spec.name] = (spec, fn)
@@ -72,8 +117,176 @@ def get_tool(name: str) -> tuple[ToolSpec, ToolFunction] | None:
 def execute_confirmed(
     confirmation_id: str, tool_name: str, args: dict
 ) -> ToolResult:
-    """Placeholder for Phase B's explicit confirmation execution path."""
-    raise NotImplementedError("Phase B will implement confirmed execution")
+    """Execute a previously proposed write action after verifying its token.
+
+    The stored proposal is consumed before validation, making every token
+    single-use even when the request has expired, mismatched, or later fails.
+    Broker gates and market freshness are checked again by the execution helpers.
+    """
+    pending = consume_pending(confirmation_id)
+    if pending is None:
+        result = ToolResult(
+            ok=False,
+            data=None,
+            error="confirmation_id not found or expired (5 min TTL)",
+        )
+        _log_execution(confirmation_id, tool_name, args, result)
+        return result
+    if pending.tool_name != tool_name:
+        result = ToolResult(
+            ok=False,
+            data=None,
+            error=f"tool_name mismatch: expected {pending.tool_name!r}",
+        )
+        _log_execution(confirmation_id, tool_name, args, result)
+        return result
+    if pending.args != args:
+        result = ToolResult(
+            ok=False, data=None, error="args do not match the proposal"
+        )
+        _log_execution(confirmation_id, tool_name, args, result)
+        return result
+
+    dispatch = {
+        "set_daily_target": _execute_set_daily_target,
+        "set_high_risk_fraction": _execute_set_high_risk_fraction,
+        "cancel_manual_action": _execute_cancel_manual_action,
+        "place_broker_order": _execute_place_broker_order,
+        "cancel_broker_order": _execute_cancel_broker_order,
+        "close_broker_position": _execute_close_broker_position,
+    }
+    fn = dispatch.get(tool_name)
+    if fn is None:
+        result = ToolResult(
+            ok=False,
+            data=None,
+            error=f"tool {tool_name!r} cannot be executed",
+        )
+        _log_execution(confirmation_id, tool_name, args, result)
+        return result
+    try:
+        result = fn(args)
+    except Exception as exc:
+        result = ToolResult(ok=False, data=None, error=str(exc))
+    _log_execution(confirmation_id, tool_name, args, result)
+    return result
+
+
+def _log_execution(
+    confirmation_id: str, tool_name: str, args: dict, result: ToolResult
+) -> None:
+    timestamp = datetime.now(timezone.utc)
+    logged_args = dict(args)
+    EXECUTION_LOG.append(
+        (timestamp, confirmation_id, tool_name, logged_args, result)
+    )
+    print(
+        f"[assistant-execution] {timestamp.isoformat()} confirmation_id="
+        f"{confirmation_id} tool={tool_name} args={logged_args!r} "
+        f"ok={result.ok} error={result.error!r}",
+        file=sys.stderr,
+        flush=True,
+    )
+
+
+def _app_endpoint(path: str):
+    from paper_api.app import app
+
+    for route in app.routes:
+        if getattr(route, "path", None) == path:
+            return route.endpoint
+    raise RuntimeError(f"API route {path!r} is not registered")
+
+
+def _execute_set_daily_target(args: dict) -> ToolResult:
+    from paper_api.schemas import DailyTargetConfigRequest
+
+    endpoint = _app_endpoint("/api/daily-target/config")
+    response = endpoint(
+        DailyTargetConfigRequest(target_amount=args["target_amount"]),
+        mode="daily_target",
+    )
+    return ToolResult(ok=True, data=jsonable_encoder(response))
+
+
+def _execute_set_high_risk_fraction(args: dict) -> ToolResult:
+    from paper_api.schemas import HighRiskConfigRequest
+
+    endpoint = _app_endpoint("/api/high-risk/config")
+    response = endpoint(
+        HighRiskConfigRequest(risk_fraction=args["risk_fraction"]),
+        mode="high_risk",
+    )
+    return ToolResult(ok=True, data=jsonable_encoder(response))
+
+
+def _execute_cancel_manual_action(args: dict) -> ToolResult:
+    del args
+    response = _app_endpoint("/api/manual/cancel")(mode="manual")
+    return ToolResult(ok=True, data=jsonable_encoder(response))
+
+
+def _execute_place_broker_order(args: dict) -> ToolResult:
+    broker = args["broker"]
+    instrument = args["instrument"]
+    adapter, _environment = _check_broker_gate(broker, instrument)
+    _check_market_open(broker, adapter, instrument)
+
+    side = args["side"]
+    order_type = args["order_type"]
+    quantity = args["quantity"]
+    if side not in {"buy", "sell"}:
+        raise ValueError("side must be 'buy' or 'sell'")
+    if order_type not in {"market", "limit"}:
+        raise ValueError("order_type must be 'market' or 'limit'")
+    if isinstance(quantity, bool) or not isinstance(quantity, (int, float)):
+        raise ValueError("quantity must be a number")
+    quantity = float(quantity)
+    if not math.isfinite(quantity) or quantity <= 0:
+        raise ValueError("quantity must be finite and greater than 0")
+
+    limit_price = args.get("limit_price")
+    if order_type == "limit":
+        if isinstance(limit_price, bool) or not isinstance(limit_price, (int, float)):
+            raise ValueError("limit orders require a numeric limit_price")
+        limit_price = float(limit_price)
+        if not math.isfinite(limit_price) or limit_price <= 0:
+            raise ValueError("limit_price must be finite and greater than 0")
+
+    request = OrderRequest(
+        client_order_id=str(uuid4()),
+        instrument=instrument,
+        side=side,
+        order_type=order_type,
+        quantity=quantity,
+        limit_price=limit_price,
+    )
+    result = adapter.place_order(request)
+    return ToolResult(ok=True, data=jsonable_encoder(result))
+
+
+def _execute_cancel_broker_order(args: dict) -> ToolResult:
+    broker = args["broker"]
+    _adapter, _environment = _check_broker_gate(
+        broker, _default_gate_instrument(broker)
+    )
+    client_order_id = args["client_order_id"]
+    if not isinstance(client_order_id, str) or not client_order_id.strip():
+        raise ValueError("client_order_id must be a non-empty string")
+    cancelled = _adapter.cancel_order(client_order_id)
+    return ToolResult(
+        ok=True,
+        data={"cancelled": bool(cancelled), "client_order_id": client_order_id},
+    )
+
+
+def _execute_close_broker_position(args: dict) -> ToolResult:
+    broker = args["broker"]
+    instrument = args["instrument"]
+    adapter, _environment = _check_broker_gate(broker, instrument)
+    _check_market_open(broker, adapter, instrument)
+    result = adapter.close_position(instrument)
+    return ToolResult(ok=True, data=jsonable_encoder(result))
 
 
 def _app_and_registry():
@@ -291,7 +504,13 @@ def set_daily_target(target_amount: float) -> ToolResult:
         _app, registry = _app_and_registry()
         session = registry.daily_target_session()
         previous = session.tracker.target_amount
-        return _proposal({"target_amount": target_amount, "previously": previous})
+        result = _proposal({"target_amount": target_amount, "previously": previous})
+        store_pending(
+            result.confirmation_id,
+            "set_daily_target",
+            {"target_amount": target_amount},
+        )
+        return result
     except Exception as exc:
         return _tool_error(exc)
 
@@ -306,7 +525,13 @@ def set_high_risk_fraction(risk_fraction: float) -> ToolResult:
             raise ValueError("risk_fraction must be greater than 0 and at most 1.0")
         _app, registry = _app_and_registry()
         previous = registry.high_risk_session().risk_fraction
-        return _proposal({"risk_fraction": risk_fraction, "previously": previous})
+        result = _proposal({"risk_fraction": risk_fraction, "previously": previous})
+        store_pending(
+            result.confirmation_id,
+            "set_high_risk_fraction",
+            {"risk_fraction": risk_fraction},
+        )
+        return result
     except Exception as exc:
         return _tool_error(exc)
 
@@ -314,7 +539,9 @@ def set_high_risk_fraction(risk_fraction: float) -> ToolResult:
 def cancel_manual_action() -> ToolResult:
     """Propose cancelling a pending Manual paper action."""
     try:
-        return _proposal({"cancelled": True})
+        result = _proposal({"cancelled": True})
+        store_pending(result.confirmation_id, "cancel_manual_action", {})
+        return result
     except Exception as exc:
         return _tool_error(exc)
 
@@ -433,13 +660,24 @@ def place_broker_order(
             quantity=quantity,
             limit_price=limit_price,
         )
-        return _proposal(
+        result = _proposal(
             {
                 "broker": broker,
                 "request": jsonable_encoder(request),
                 "market_price": market_price,
             }
         )
+        pending_args = {
+            "broker": broker,
+            "instrument": instrument,
+            "side": side,
+            "order_type": order_type,
+            "quantity": quantity,
+        }
+        if limit_price is not None:
+            pending_args["limit_price"] = limit_price
+        store_pending(result.confirmation_id, "place_broker_order", pending_args)
+        return result
     except Exception as exc:
         return _tool_error(exc)
 
@@ -450,7 +688,13 @@ def cancel_broker_order(broker: str, client_order_id: str) -> ToolResult:
         if not isinstance(client_order_id, str) or not client_order_id.strip():
             raise ValueError("client_order_id must be a non-empty string")
         _adapter, _environment = _check_broker_gate(broker, _default_gate_instrument(broker))
-        return _proposal({"broker": broker, "client_order_id": client_order_id})
+        result = _proposal({"broker": broker, "client_order_id": client_order_id})
+        store_pending(
+            result.confirmation_id,
+            "cancel_broker_order",
+            {"broker": broker, "client_order_id": client_order_id},
+        )
+        return result
     except Exception as exc:
         return _tool_error(exc)
 
@@ -466,7 +710,13 @@ def close_broker_position(broker: str, instrument: str) -> ToolResult:
             )
         adapter, _environment = _check_broker_gate(broker, instrument)
         _check_market_open(broker, adapter, instrument)
-        return _proposal({"broker": broker, "instrument": instrument})
+        result = _proposal({"broker": broker, "instrument": instrument})
+        store_pending(
+            result.confirmation_id,
+            "close_broker_position",
+            {"broker": broker, "instrument": instrument},
+        )
+        return result
     except Exception as exc:
         return _tool_error(exc)
 
