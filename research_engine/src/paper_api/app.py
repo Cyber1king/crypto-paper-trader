@@ -1377,6 +1377,26 @@ def create_app(
 
         return ReplayStateResponse.from_state(view.reset(), mode=name)
 
+    @app.post("/api/assistant/chat", tags=["assistant"])
+    def assistant_chat(payload: dict) -> dict:
+        """Send a message to the assistant; writes are returned for confirmation."""
+        from paper_api.assistant.llm import (
+            AssistantUnavailable,
+            build_initial_messages,
+            run_assistant_turn,
+        )
+
+        message = str(payload.get("message") or "").strip()
+        if not message:
+            raise HTTPException(status_code=400, detail="message is required")
+        history = payload.get("history") or []
+        messages = build_initial_messages(message, history=history)
+        try:
+            result = run_assistant_turn(messages)
+        except AssistantUnavailable as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        return result
+
     return app
 
 
