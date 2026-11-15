@@ -87,3 +87,6 @@ research_engine/data/assistant_history.json
 
 # Codex / OpenCode auto-generated backups
 *.bak
+
+# Debug artifacts from running the packaged .exe
+exe_run.log

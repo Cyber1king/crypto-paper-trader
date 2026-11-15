@@ -41,12 +41,13 @@ from crypto_paper_lab.walkforward import (
     DATASET_SHA256,
     validate_dataset_integrity,
 )
+from crypto_paper_lab.paths import research_engine_root
 
 #: ``marketdata.py`` -> ``paper_api`` -> ``src`` -> ``research_engine``.
 #: Resolving against the package location rather than the process working
 #: directory means the endpoint serves the same file regardless of where uvicorn
 #: was launched from.
-RESEARCH_ENGINE_ROOT = Path(__file__).resolve().parents[2]
+RESEARCH_ENGINE_ROOT = research_engine_root()
 
 #: Default number of candles returned when the caller supplies no dates: a
 #: bounded *recent* slice, never the whole 17,544-candle series.

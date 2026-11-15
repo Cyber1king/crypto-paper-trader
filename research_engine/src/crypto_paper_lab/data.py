@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .models import Candle
+from .paths import data_dir
 
 
 def _parse_timestamp(value: str) -> datetime:
@@ -42,9 +43,22 @@ def _parse_timestamp(value: str) -> datetime:
 def load_ohlcv_csv(path: str | Path) -> list[Candle]:
     """Load OHLCV candles from a CSV file."""
 
+    csv_path = Path(path)
+    if not csv_path.is_absolute():
+        parts = csv_path.parts
+        if parts[:2] == ("research_engine", "data"):
+            csv_path = data_dir().joinpath(*parts[2:])
+        elif parts[:1] == ("data",):
+            csv_path = data_dir().joinpath(*parts[1:])
+        elif csv_path.exists():
+            # Preserve caller-relative paths that already resolve from its CWD.
+            pass
+        else:
+            csv_path = data_dir() / csv_path
+
     candles: list[Candle] = []
 
-    with Path(path).open(
+    with csv_path.open(
         newline="",
         encoding="utf-8",
     ) as handle:

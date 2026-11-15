@@ -6,6 +6,8 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+from crypto_paper_lab.paths import data_dir
+
 from .base import LiveTradingDisabled
 
 
@@ -23,7 +25,7 @@ def load_live_config(path: str | Path | None = None) -> dict:
     config_path = (
         Path(path)
         if path is not None
-        else Path(__file__).resolve().parents[3] / "data" / "live_config.json"
+        else data_dir() / "live_config.json"
     )
     if not config_path.is_file():
         raise FileNotFoundError(

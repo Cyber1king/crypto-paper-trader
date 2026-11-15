@@ -38,10 +38,14 @@ wallet, no credentials.
 """
 from __future__ import annotations
 
+import sys
 from datetime import datetime
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.encoders import jsonable_encoder
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from paper_api.brokers.base import (
     AccountSnapshot,
     BrokerUnavailable,
@@ -1450,6 +1454,42 @@ def create_app(
 
         clear_history()
         return {"ok": True}
+
+    _here = Path(__file__).resolve()
+    _meipass = getattr(sys, "_MEIPASS", None)
+    _candidates = [
+        _here.parents[3] / "artifacts" / "crypto-paper-lab" / "dist" / "public",
+        _here.parents[2] / "artifacts" / "crypto-paper-lab" / "dist" / "public",
+        _here.parents[2] / "artifacts" / "crypto-paper-lab" / "dist",
+        Path(_meipass) / "frontend_dist" if _meipass else None,
+    ]
+    FRONTEND_DIST = next(
+        (
+            candidate.resolve()
+            for candidate in _candidates
+            if candidate is not None
+            and (candidate / "index.html").is_file()
+            and (candidate / "assets").is_dir()
+        ),
+        None,
+    )
+    if FRONTEND_DIST is not None:
+        print(f"[spa] serving frontend from {FRONTEND_DIST}", file=sys.stderr)
+        app.mount(
+            "/assets",
+            StaticFiles(directory=FRONTEND_DIST / "assets"),
+            name="frontend-assets",
+        )
+
+        @app.get("/{full_path:path}", include_in_schema=False)
+        def serve_frontend(full_path: str):
+            """Serve the SPA entry point for client-side navigation paths."""
+            if full_path == "api" or full_path.startswith("api/"):
+                raise HTTPException(status_code=404, detail="Not Found")
+            requested_file = (FRONTEND_DIST / full_path).resolve()
+            if FRONTEND_DIST in requested_file.parents and requested_file.is_file():
+                return FileResponse(requested_file)
+            return FileResponse(FRONTEND_DIST / "index.html")
 
     return app
 

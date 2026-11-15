@@ -49,6 +49,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from .paths import data_dir
+
 __all__ = [
     "ResearchGuardError",
     "CrossAssetAuthorization",
@@ -87,7 +89,7 @@ VOLUME_SEMANTICS = frozenset(
 MARKET_TYPES_SUPPORTED = frozenset({"crypto_spot", "forex_spot"})
 
 _REGISTRY_ENV = "CRYPTO_PAPER_LAB_RESEARCH_REGISTRY"
-_DEFAULT_REGISTRY = Path(__file__).resolve().parents[2] / "data" / "research_registry.json"
+_DEFAULT_REGISTRY = data_dir() / "research_registry.json"
 
 #: Fields this module needs in order to make a *decision*. Structural validation
 #: of the wider metadata record lives in :mod:`registry_schema` and runs once at

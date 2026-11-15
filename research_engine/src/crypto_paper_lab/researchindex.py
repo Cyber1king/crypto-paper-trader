@@ -33,6 +33,8 @@ import json
 from pathlib import Path
 from typing import Any, Sequence
 
+from .paths import data_dir
+
 __all__ = [
     "INDEX_FILENAME",
     "line_digest",
@@ -55,7 +57,7 @@ MATCH_FRACTION = 0.5
 def _root() -> Path:
     """``src/crypto_paper_lab`` -> ``data``."""
 
-    return Path(__file__).resolve().parents[2] / "data"
+    return data_dir()
 
 
 INDEX_FILENAME = "research_registry.candle_index.json"
