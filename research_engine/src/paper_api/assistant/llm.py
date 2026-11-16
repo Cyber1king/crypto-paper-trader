@@ -69,6 +69,56 @@ def _tool_summary(tool_name: str, result: ToolResult) -> str:
     if not result.ok:
         return f"{tool_name} failed: {result.error or 'unknown error'}"
     data = result.data
+    if tool_name == "get_system_status" and isinstance(data, dict):
+        paper = data.get("paper", {})
+        brokers = data.get("brokers", {})
+        markets = data.get("markets", {})
+        paper_balance = paper.get("balance")
+        if isinstance(paper_balance, dict) and "balance" in paper_balance:
+            paper_text = (
+                f"paper balance {float(paper_balance['balance']):,.2f} "
+                f"{paper_balance.get('currency', '')}".strip()
+            )
+        else:
+            paper_text = f"paper balance unavailable ({_status_reason(paper_balance)})"
+
+        mt5 = brokers.get("mt5_demo")
+        if isinstance(mt5, dict) and "balance" in mt5:
+            mt5_text = (
+                f"MT5 balance {float(mt5['balance']):,.2f} "
+                f"{mt5.get('currency', '')}".strip()
+            )
+        else:
+            mt5_text = f"MT5 status {_status_reason(mt5)}"
+
+        binance = brokers.get("binance_testnet")
+        if isinstance(binance, dict) and "status" in binance:
+            binance_text = f"Binance status {binance['status']}"
+        elif isinstance(binance, dict) and "balance" in binance:
+            binance_text = (
+                f"Binance balance {float(binance['balance']):,.2f} "
+                f"{binance.get('currency', '')}".strip()
+            )
+        else:
+            binance_text = f"Binance status {_status_reason(binance)}"
+
+        signal = markets.get("btc_signal")
+        if isinstance(signal, dict) and signal.get("signal"):
+            signal_text = (
+                f"BTC signal {signal['signal']} "
+                f"({signal.get('reason', 'no reason supplied')}) at {signal.get('price')}"
+            )
+        else:
+            signal_text = f"BTC signal unavailable ({_status_reason(signal)})"
+
+        positions = paper.get("positions")
+        if isinstance(positions, list) and not positions:
+            next_step = "Shall I run a paper replay to generate positions?"
+        elif isinstance(mt5, dict) and "balance" in mt5:
+            next_step = "Would you like me to check MT5 positions?"
+        else:
+            next_step = "Would you like a deeper breakdown of any section?"
+        return f"Master, {paper_text}; {mt5_text}; {binance_text}; {signal_text}. {next_step}"
     if isinstance(data, dict) and data.get("status"):
         return f"{tool_name.replace('_', ' ')}: {data['status']} — {data.get('reason', '')}".strip()
     if tool_name in {"get_broker_balance", "get_paper_balance"} and isinstance(data, dict):
@@ -89,6 +139,17 @@ def _tool_summary(tool_name: str, result: ToolResult) -> str:
     return f"{tool_name.replace('_', ' ')} returned: {json.dumps(data, default=str)}"
 
 
+def _status_reason(data: Any) -> str:
+    if isinstance(data, dict):
+        if data.get("reason"):
+            return str(data["reason"])
+        if data.get("status"):
+            return str(data["status"])
+        if "balance" in data:
+            return "available"
+    return "unavailable"
+
+
 def _last_user_text(messages: list[dict]) -> str:
     for message in reversed(messages):
         if message.get("role") == "user":
@@ -102,7 +163,9 @@ def _fake_turn(messages: list[dict]) -> dict:
     text = _last_user_text(messages)
     lowered = text.lower()
 
-    if "balance" in lowered and "mt5" in lowered:
+    if any(k in lowered for k in ("status", "state of everything", "system report", "report")):
+        tool_name, args = "get_system_status", {}
+    elif "balance" in lowered and "mt5" in lowered:
         tool_name, args = "get_broker_balance", {"broker": "mt5_demo"}
     elif "balance" in lowered and "paper" in lowered:
         tool_name, args = "get_paper_balance", {}
@@ -297,15 +360,27 @@ def run_assistant_turn(messages: list[dict], max_tool_rounds: int = 5) -> dict:
 
 
 SYSTEM_PROMPT = (
-    "You are the Crypto Paper Lab assistant. You help the user inspect their "
-    "paper trading engine, live broker accounts, research status, and market "
-    "data. You have tools to READ state and to PROPOSE WRITE ACTIONS. You "
-    "must NEVER claim to have executed a write action — write actions require "
-    "the user to confirm them in the UI before they run. When you propose a "
-    "write action, explain what it will do briefly, then wait for confirmation. "
-    "If a tool returns an error, report the exact error to the user. Never "
-    "invent numbers, balances, positions, or signals — always use tool calls. "
-    "Keep replies short and specific."
+    "You are the Crypto Paper Lab assistant, a professional trading operations "
+    "assistant for the user you must address as 'Master' at the start of every "
+    "reply. You help Master inspect the paper trading engine, live broker "
+    "accounts, research status, and market data.\n\n"
+    "PERSONA RULES:\n"
+    "- Always begin your reply with 'Master' (e.g. 'Master, here is your report.')\n"
+    "- Be concise and factual. Use bullet points or short sentences.\n"
+    "- Never invent numbers, balances, positions, or signals. Always use tool calls.\n"
+    "- After presenting any status report or summary, always end with one concrete "
+    "next-action suggestion phrased as a question, for example: 'Shall I run a "
+    "paper replay on EUR/USD?' or 'Would you like me to place a demo order on "
+    "MT5?' Never just present information — always offer a next step.\n"
+    "- When you propose a write action, explain briefly what it will do, then wait "
+    "for the user to confirm in the UI. You must NEVER claim to have executed a "
+    "write action — write actions require confirmation.\n"
+    "- If a tool returns an error, report the exact error to the user in plain "
+    "language. Do not hide or reinterpret errors.\n\n"
+    "SYSTEM STATUS: When Master asks for a status report, 'state of everything', "
+    "'how's the system', or similar, call the get_system_status tool once and use "
+    "its full output to compose the report. Do not call individual tools "
+    "separately for a status report — the composite tool is authoritative."
 )
 
 

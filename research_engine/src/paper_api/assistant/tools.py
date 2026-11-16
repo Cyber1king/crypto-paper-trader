@@ -415,7 +415,7 @@ def get_latest_signal(instrument: str = "BTC/USDT") -> ToolResult:
     """Return the strategy's latest signal for a registered instrument."""
     try:
         if instrument == "BTC/USDT":
-            response = _route("/api/signal")()
+            response = _route("/api/signal")(at=None)
             signal = jsonable_encoder(response)
             return ToolResult(
                 ok=True,
@@ -482,6 +482,75 @@ def get_live_config() -> ToolResult:
         return ToolResult(ok=True, data=load_live_config())
     except Exception as exc:
         return _tool_error(exc)
+
+
+def get_system_status() -> ToolResult:
+    """Return a best-effort snapshot across paper, brokers, markets and gates."""
+
+    def read(call: Callable[[], ToolResult]):
+        try:
+            result = call()
+            if not result.ok:
+                return {"status": "error", "reason": result.error or "unknown error"}
+            return result.data
+        except Exception as exc:
+            return {"status": "error", "reason": str(exc)}
+
+    paper_balance = read(get_paper_balance)
+    paper_positions = read(get_paper_positions)
+    recent_trades = read(lambda: get_paper_trades(limit=5))
+    mt5_status = read(lambda: get_broker_balance("mt5_demo"))
+    binance_status = read(lambda: get_broker_balance("binance_testnet"))
+    btc_signal = read(lambda: get_latest_signal("BTC/USDT"))
+    research_status = read(get_research_status)
+    live_config = read(get_live_config)
+
+    if isinstance(recent_trades, list):
+        recent_trades_count: int | dict = len(recent_trades)
+    elif isinstance(recent_trades, dict) and recent_trades.get("status") == "error":
+        recent_trades_count = recent_trades
+    else:
+        recent_trades_count = 0
+
+    if isinstance(research_status, dict) and research_status.get("status") != "error":
+        instruments = research_status.get("instruments", [])
+        instruments_count: int | dict = int(research_status.get("count", len(instruments)))
+    else:
+        instruments = research_status
+        instruments_count = research_status
+
+    if isinstance(live_config, dict) and live_config.get("status") != "error":
+        global_config = live_config.get("global", {})
+        instrument_gates: dict | list = live_config.get("instruments", {})
+        production_unlocked: bool | dict = bool(global_config.get("production_unlocked", False))
+    else:
+        instrument_gates = live_config
+        production_unlocked = live_config
+
+    return ToolResult(
+        ok=True,
+        data={
+            "paper": {
+                "balance": paper_balance,
+                "positions": paper_positions,
+                "recent_trades_count": recent_trades_count,
+            },
+            "brokers": {
+                "mt5_demo": mt5_status,
+                "binance_testnet": binance_status,
+            },
+            "markets": {"btc_signal": btc_signal},
+            "research": {
+                "instruments_count": instruments_count,
+                "instruments": instruments,
+            },
+            "gates": {
+                "live_trading_enabled": is_live_trading_enabled(),
+                "production_unlocked": production_unlocked,
+                "instruments": instrument_gates,
+            },
+        },
+    )
 
 
 def _proposal(data: dict) -> ToolResult:
@@ -768,6 +837,7 @@ _register("get_market_snapshot", "Read the latest available candle for an instru
 _register("get_latest_signal", "Read the latest strategy signal for an instrument.", {"type": "object", "properties": {"instrument": {"type": "string", "default": "BTC/USDT"}}, "additionalProperties": False}, "read", get_latest_signal)
 _register("get_research_status", "Read registered instrument research status.", _EMPTY_SCHEMA, "read", get_research_status)
 _register("get_live_config", "Read the current live trading gates.", _EMPTY_SCHEMA, "read", get_live_config)
+_register("get_system_status", "Return a complete snapshot of paper, brokers, markets, research, and gates for a status report.", _EMPTY_SCHEMA, "read", get_system_status)
 _register("set_daily_target", "Propose a Daily Target paper goal change.", {"type": "object", "properties": {"target_amount": {"type": "number", "exclusiveMinimum": 0}}, "required": ["target_amount"], "additionalProperties": False}, "write_paper", set_daily_target)
 _register("set_high_risk_fraction", "Propose a High-Risk paper sizing change.", {"type": "object", "properties": {"risk_fraction": {"type": "number", "exclusiveMinimum": 0, "maximum": 1}}, "required": ["risk_fraction"], "additionalProperties": False}, "write_paper", set_high_risk_fraction)
 _register("cancel_manual_action", "Propose cancelling a pending manual paper action.", _EMPTY_SCHEMA, "write_paper", cancel_manual_action)
