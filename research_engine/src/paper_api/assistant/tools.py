@@ -414,20 +414,6 @@ def get_market_snapshot(instrument: str) -> ToolResult:
 def get_latest_signal(instrument: str = "BTC/USDT") -> ToolResult:
     """Return the strategy's latest signal for a registered instrument."""
     try:
-        if instrument == "BTC/USDT":
-            response = _route("/api/signal")(at=None)
-            signal = jsonable_encoder(response)
-            return ToolResult(
-                ok=True,
-                data={
-                    key: signal[key]
-                    for key in (
-                        "asset", "signal", "reason", "price", "support",
-                        "resistance", "trend",
-                    )
-                },
-            )
-
         from crypto_paper_lab.researchguard import (
             _instrument_entry,
             load_registry,
@@ -443,11 +429,12 @@ def get_latest_signal(instrument: str = "BTC/USDT") -> ToolResult:
         )
         _app, modes = _app_and_registry()
         replay_session = modes.session("standard", instrument=instrument)
-        result = signals.resolve_signal(candles, replay_session.config)
+        config = replay_session.replay.config
+        result = signals.resolve_signal(candles, config)
         return ToolResult(
             ok=True,
             data={
-                "asset": replay_session.config.asset,
+                "asset": config.asset,
                 "signal": result.side,
                 "reason": result.reason,
                 "price": result.price,
