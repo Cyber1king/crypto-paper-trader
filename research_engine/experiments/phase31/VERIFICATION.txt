@@ -1,0 +1,208 @@
+================================================================================
+PHASE 31 - READ-ONLY POST-HOLDOUT TRADE ANALYSIS - VERIFICATION RECORD
+================================================================================
+
+Phase type   : diagnostic research (NOT strategy optimisation)
+Date          : 2026-10-09
+Repository    : C:\Users\Survival\Documents\Default Project\crypto-paper-trader
+
+This file records the integrity state of the frozen experiment before and after
+the analysis, every file inspected, the Git state, and confirmation that every
+execution restriction was honoured.
+
+================================================================================
+1. RESTRICTIONS - CONFIRMATION
+================================================================================
+
+  CONFIRMED  No strategy change was made.
+  CONFIRMED  No parameter was tuned and no new parameter value was chosen.
+  CONFIRMED  The Phase 30B holdout was NOT rerun or re-evaluated.
+  CONFIRMED  The spent holdout was NOT reused as validation.
+  CONFIRMED  No backtest was executed.
+  CONFIRMED  run_backtest() was never called.
+  CONFIRMED  analyze() was never called.
+  CONFIRMED  No walk-forward harness was invoked.
+  CONFIRMED  No A2 configuration was run or compared.
+  CONFIRMED  validation_harness.main() was never invoked.
+  CONFIRMED  No holdout performance was recalculated.
+  CONFIRMED  No news or sentiment data was fetched, invented or attached.
+  CONFIRMED  The cost model was not modified.
+  CONFIRMED  No recommendation from ANALYSIS.md section 7 was implemented.
+  CONFIRMED  No existing file was overwritten, renamed, moved or deleted.
+  CONFIRMED  Nothing was staged, committed or pushed.
+
+Only three files were created, all new, all in experiments/phase31/:
+  ANALYSIS.md
+  TRADE_BREAKDOWN.csv
+  VERIFICATION.txt   (this file)
+
+================================================================================
+2. FROZEN ARTEFACT DIGESTS - BEFORE AND AFTER THE ANALYSIS
+================================================================================
+
+  ARTEFACT                                          BEFORE == AFTER
+  ------------------------------------------------  -----------------
+  data/oos/binance_spot_BTCUSDT_1h_202609-202610.csv
+      expected  c475e541c9c8fb393713854e1640d3a2a029100472dc677e9fe11f3e42a8f99b
+      actual    c475e541c9c8fb393713854e1640d3a2a029100472dc677e9fe11f3e42a8f99b   MATCH
+
+  experiments/phase29/PREREGISTRATION.md
+      expected  b06f36e21df0fe403e3a75cbf8c3de84161607348966d622b65ea3f51bf217cc
+      actual    b06f36e21df0fe403e3a75cbf8c3de84161607348966d622b65ea3f51bf217cc   MATCH
+
+  experiments/phase30/RESULTS_holdout.json    4d69a2e29ea7c6a8ce6c9998ff7f5b550ba2feecb5d38eb07eca450705ff80ab
+  experiments/phase30/RESULTS_holdout.txt     fd3f7741a7dbab8fd222f47683e950d291edc26722e237334d7b008aac861780
+  experiments/phase30/RESULTS_trades.csv       174d558719f31067922b5823ce9213f58555c3ddb54505f5f8021ed5b7404fd1
+  experiments/phase30/SUMMARY.md               9e3171b08555e06b4c380fbe97cf68e21e9cba447a599a9d70bb2f0fc7e1968d
+      all four byte-identical before and after the analysis              MATCH
+
+  Primary research dataset (unmodified reference):
+  data/BTCUSDT_1h_Cleaned (1).csv
+  expected  201A3B15D50A791CB5BE2B755107C8303906C8FC3CA6B64E8377C9FC73BA016B   MATCH
+
+================================================================================
+3. PHASE 30 RESULTS VERIFIED AGAINST THE PHASE 30 REPORT
+================================================================================
+
+  QUANTITY              RECORDED            VERIFIED FROM ARTIFACTS      RESULT
+  --------------------  ------------------  --------------------------  ------
+  trade count           20                  20 rows                      agrees
+  gross P&L             -6.321462           -6.321462                    agrees
+  total friction        6.001395            6.001395                     agrees *
+  net P&L               -12.322857          -12.322857                   agrees
+  winners               5                   5                            agrees
+  losers                15                  15                           agrees
+  flat trades           0                   0                            agrees
+  profit factor         0.4925              0.4925 (net basis)           agrees **
+  ending balance        9987.677143         9987.677143                  agrees
+  exit counts           19 + 1 = 20         20                           agrees
+
+  *  Summing the 6-decimal costs column of RESULTS_trades.csv yields 6.001396,
+     a difference of 1.15e-06 from the full-precision JSON total. This is
+     per-row CSV rounding, not a data conflict. DOCUMENTED, not corrected.
+
+  ** profit_factor is computed by stats.performance() from NET pnl
+     (stats.py:102-111), although its local variables are named gross_profit and
+     gross_loss. The gross-basis profit factor is 0.6805. Both are correct; they
+     answer different questions. DOCUMENTED in ANALYSIS.md section 2, not
+     corrected.
+
+  No discrepancy was found between the Phase 30B report and its own artifacts.
+
+================================================================================
+4. ARITHMETIC VALIDATION OF THE ONE DERIVATION PERFORMED
+================================================================================
+
+Per-trade fees and slippage are NOT recorded in the Phase 30B artifacts; only a
+combined costs column exists. They were reconstructed from recorded prices and
+quantity using the frozen formulas at simulator.py:180-189, then validated
+against recorded values BEFORE use:
+
+  VALIDATION                                            RESIDUAL
+  ----------------------------------------------------  ---------
+  derived costs vs recorded costs column                1.31e-06
+  recomputed gross vs recorded gross_pnl                5.50e-06
+  recomputed net   vs recorded net_pnl                  6.59e-06
+  derived fee total vs recorded fee_total        4.000928 vs 4.000930
+  derived slippage total vs recorded slippage_total
+                                                       2.000464 vs 2.000465
+  derived spread total vs recorded spread_total    0.000000 vs 0.000000
+
+  All residuals are floating-point rounding. The derivation reproduces recorded
+  figures and therefore adds no new information. No strategy output was
+  recomputed; no backtest was involved.
+
+================================================================================
+5. FILES INSPECTED
+================================================================================
+
+  Authoritative results:
+    research_engine/experiments/phase30/SUMMARY.md
+    research_engine/experiments/phase30/RESULTS_holdout.txt
+    research_engine/experiments/phase30/RESULTS_holdout.json
+    research_engine/experiments/phase30/RESULTS_trades.csv
+    research_engine/experiments/phase29/PREREGISTRATION.md
+
+  Source inspected for logic and formulas (read-only):
+    research_engine/src/crypto_paper_lab/simulator.py    (cost formulas 156-189)
+    research_engine/src/crypto_paper_lab/stats.py         (metric definitions 96-151)
+    research_engine/src/crypto_paper_lab/strategy.py      (config, signal chain)
+    research_engine/src/crypto_paper_lab/backtest.py       (loop, exit precedence)
+    research_engine/src/crypto_paper_lab/costs.py         (TradingCosts validation)
+    research_engine/src/crypto_paper_lab/indicators.py     (indicator definitions)
+    research_engine/src/crypto_paper_lab/models.py        (PaperTrade fields)
+    research_engine/src/crypto_paper_lab/robustness.py    (monthly_breakdown)
+    research_engine/src/crypto_paper_lab/windowstats.py   (exposure refusal)
+    research_engine/experiments/phase15/RESEARCH_STATE.json
+    research_engine/experiments/phase15/RESEARCH_CHECKPOINT.md
+
+  News / sentiment availability check:
+    searched phase30 artifacts, all crypto_paper_lab modules, all data files
+    result: NO news, sentiment, economic-event, order-book, volume-profile or
+            funding data exists anywhere in the repository.
+            The only "news"/"headline" match is the unrelated word "headline"
+            in a robustness.py docstring.
+    No historical headline or sentiment score was invented or attached.
+
+================================================================================
+6. GIT STATE
+================================================================================
+
+  Recorded BEFORE analysis and re-checked AFTER:
+
+    HEAD                 dccebbd53ee8365474345506db9099b13356b53c   (unchanged)
+    branch               main
+    origin/main          dccebbd53ee8365474345506db9099b13356b53c   (unchanged)
+    commits ahead of origin/main   0    (no commit occurred)
+    staged files                  0    (nothing staged)
+    modified tracked files        0
+    deleted tracked files         0
+    stash entries                 0
+
+  Untracked files: 35 before the analysis, 38 after (the 3 new Phase 31 files).
+  No pre-existing untracked file was modified or removed.
+
+  Breakdown of untracked files AFTER the analysis:
+    frozen data/oos artefacts (Phase 29A-C)                  30
+    experiments/phase29/PREREGISTRATION.md                     1
+    experiments/phase30/  (4 Phase 30B result files)          4
+    experiments/phase31/  (3 new Phase 31 files)              3
+    TOTAL                                                     38
+
+  Files created by Phase 31:
+    research_engine/experiments/phase31/ANALYSIS.md
+    research_engine/experiments/phase31/TRADE_BREAKDOWN.csv
+    research_engine/experiments/phase31/VERIFICATION.txt
+
+================================================================================
+7. LIMITATIONS CARRIED INTO THE ANALYSIS
+================================================================================
+
+  Recorded per-trade data available:
+    n, side, entry_time, exit_time, entry_price, exit_price, quantity,
+    bars_held, gross_pnl, costs, net_pnl, exit_reason
+
+  NOT recorded and NOT derivable without rerunning the spent holdout:
+    - per-trade signal label (bullish retest / bearish retest /
+      uptrend breakout / downtrend breakdown)
+    - indicator values at entry: breakout_distance, retest_distance,
+      trend_state, support_at_entry, resistance_at_entry,
+      realised_volatility, mean_range, signal_close
+    - any market-regime, volatility or volume context
+    - exposure / percent time in market (deliberately never computed)
+
+  Consequently the following are classified NOT TESTABLE in this phase and no
+  claim is made about them:
+    false breakouts, failed retests, entry quality, market-condition
+    association, and whether any alternative exit or holding rule would help.
+
+  Statistical standing is unchanged: 20 clustered trades across 38 days on one
+  venue. The Phase 29D pre-registration declared the result INCONCLUSIVE before
+  these numbers existed, and that declaration stands. No statistical
+  significance is claimed anywhere in ANALYSIS.md.
+
+  The Phase 30B holdout is SPENT and must never be reused as fresh validation.
+
+================================================================================
+END OF VERIFICATION RECORD
+================================================================================

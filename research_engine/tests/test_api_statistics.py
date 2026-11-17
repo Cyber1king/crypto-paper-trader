@@ -375,9 +375,10 @@ def test_schema_rejects_a_naked_infinite_profit_factor() -> None:
             "deducted_costs": 0.0,
         },
         "strategy": {"config_repr": "x", "config_hash": "y"},
-        "execution": {
-            "execution_model": "cost_deduction",
-            "fee_rate": 0.001,
+"execution": {
+              "execution_model": "cost_deduction",
+              "market_type": "crypto_spot",
+              "fee_rate": 0.001,
             "slippage_rate": 0.0005,
             "spread_rate": 0.0,
             "costs_repr": "x",

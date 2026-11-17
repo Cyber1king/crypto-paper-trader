@@ -1,0 +1,26 @@
+FINAL STATUS AFTER REVERT AND PROBE
+
+PART 1 — Import Revert: COMPLETE
+- dataset.py line 3: from datetime import datetime (reverted from import datetime)
+- No other import changes
+
+PART 2 — is_forex_market_open Probe: COMPLETE
+- Output confirms function behaves correctly
+- Friday 21:00→True, Friday 22:00→False, Weekend→False, Sunday 22:00→True, Monday 00:00→True
+- Validator condition `if is_forex_market_open(ts): raise ValueError(...)` is correct/not inverted
+
+PART 3 — Gap-Scan Code: NOT MODIFIED
+- Per instructions, no changes to the interval-check block (lines 466-505)
+- The four-line market_type resolution block remains after the docstring
+
+AUTHORIZED CHANGES REMAIN IN PLACE:
+1. dataset.py: Four lines added after docstring (lines 319-322) resolving market_type from identity
+2. marketdata.py: Two changes (signature + validate_dataset call with market_type)
+3. market-chart.tsx: TypeScript fix (instrument moved from destructure to interface)
+4. hooks.ts: TypeScript fixes (queryKeys.replay, useReplayState signatures)
+5. dashboard.tsx: instrument prop with as string cast
+
+VERIFICATION:
+- Python: BTC OK with market_type='crypto_spot' and expected_interval_seconds=3600
+- Python: EURUSD session-aware gap checking triggers ValueError when open market hour inside gap (expected new behavior)
+- TypeScript: market-chart.tsx clean compilation (EMPTY output)

@@ -1,0 +1,198 @@
+================================================================================
+PHASE 32 - RESEARCH AND IMPROVEMENT DESIGN - VERIFICATION RECORD
+================================================================================
+
+Phase type : research and documentation ONLY
+Repository : C:\Users\Survival\Documents\Default Project\crypto-paper-trader
+
+Records integrity state before and after, files inspected, Git status, and
+confirmation of every restriction.
+
+================================================================================
+1. RESTRICTIONS - CONFIRMATION
+================================================================================
+
+  CONFIRMED  No source code was changed.
+  CONFIRMED  No strategy or parameter was changed.
+  CONFIRMED  No backtest was run. run_backtest() was never called.
+  CONFIRMED  No new performance calculation was performed.
+  CONFIRMED  The spent Phase 30B holdout was not executed.
+  CONFIRMED  No AI API call was made and no provider was integrated.
+  CONFIRMED  No provider capability, price or availability is asserted.
+  CONFIRMED  No news was fetched and none was associated with any past trade.
+  CONFIRMED  No recommendation was implemented.
+  CONFIRMED  No acceptance threshold was invented.
+  CONFIRMED  No existing file was modified, renamed, moved or deleted.
+  CONFIRMED  Nothing was staged, committed or pushed.
+  CONFIRMED  No new profitability claim was made.
+
+  Files created - exactly five, all new, all under
+  research_engine/experiments/phase32/:
+      RESEARCH_PLAN.md
+      AI_ARCHITECTURE.md
+      EVALUATION_PROTOCOL.md
+      ROADMAP.md
+      VERIFICATION.txt   (this file)
+
+================================================================================
+2. FROZEN DIGESTS - UNCHANGED
+================================================================================
+
+  research_engine/data/oos/binance_spot_BTCUSDT_1h_202609-202610.csv
+    required  c475e541c9c8fb393713854e1640d3a2a029100472dc677e9fe11f3e42a8f99b
+    actual    c475e541c9c8fb393713854e1640d3a2a029100472dc677e9fe11f3e42a8f99b
+    STATUS    MATCH (unchanged)
+
+  research_engine/experiments/phase29/PREREGISTRATION.md
+    required  b06f36e21df0fe403e3a75cbf8c3de84161607348966d622b65ea3f51bf217cc
+    actual    b06f36e21df0fe403e3a75cbf8c3de84161607348966d622b65ea3f51bf217cc
+    STATUS    MATCH (unchanged)
+
+  All four Phase 30 result artefacts - byte-identical before and after:
+    RESULTS_holdout.json  4d69a2e29ea7c6a8ce6c9998ff7f5b550ba2feecb5d38eb07eca450705ff80ab
+    RESULTS_holdout.txt   fd3f7741a7dbab8fd222f47683e950d291edc26722e237334d7b008aac861780
+    RESULTS_trades.csv    174d558719f31067922b5823ce9213f58555c3ddb54505f5f8021ed5b7404fd1
+    SUMMARY.md            9e3171b08555e06b4c380fbe97cf68e21e9cba447a599a9d70bb2f0fc7e1968d
+
+  Primary research dataset (read-only reference):
+    research_engine/data/BTCUSDT_1h_Cleaned (1).csv
+    201A3B15D50A791CB5BE2B755107C8303906C8FC3CA6B64E8377C9FC73BA016B   MATCH
+
+================================================================================
+3. FILES INSPECTED (read-only)
+================================================================================
+
+  Strategy engine:
+    src/crypto_paper_lab/strategy.py        config + signal decision chain
+    src/crypto_paper_lab/indicators.py      trend, support_resistance, vol, range
+    src/crypto_paper_lab/backtest.py         loop, timing, exit precedence, EOD
+    src/crypto_paper_lab/simulator.py        sizing, cost application, broker guards
+    src/crypto_paper_lab/costs.py            TradingCosts + validation
+    src/crypto_paper_lab/stats.py            metric definitions
+    src/crypto_paper_lab/models.py           PaperTrade fields
+    src/crypto_paper_lab/robustness.py       monthly_breakdown
+    src/crypto_paper_lab/dataset.py          validate_dataset
+    src/crypto_paper_lab/data.py             load_ohlcv_csv
+    src/crypto_paper_lab/acquisition.py      strict acquisition + overlap guards
+    src/crypto_paper_lab/walkforward.py      6 windows, 11 leakage guards
+    src/crypto_paper_lab/execution.py        ExecutionPolicy seam
+    src/crypto_paper_lab/windowstats.py      exposure refusal
+    src/crypto_paper_lab/modes.py            the six modes
+
+  Recorded research artifacts:
+    experiments/phase10/{OOS_RESULTS.md, SUMMARY.md}
+    experiments/phase11/SUMMARY.md
+    experiments/phase13/SUMMARY.md, PLAN.md
+    experiments/phase14/SUMMARY.md           (Phase 14C work lives here)
+    experiments/phase15/{RESEARCH_CHECKPOINT.md, RESEARCH_STATE.json}
+    experiments/phase29/PREREGISTRATION.md
+    experiments/phase30/{SUMMARY.md, RESULTS_holdout.txt,
+                         RESULTS_holdout.json, RESULTS_trades.csv}
+    experiments/phase31/{ANALYSIS.md, TRADE_BREAKDOWN.csv, VERIFICATION.txt}
+
+================================================================================
+4. VERIFIED FACTS RECORDED IN THE DELIVERABLES
+================================================================================
+
+  Baseline behaviour
+    - Single-asset BTC/USDT 1h breakout-and-retest rule, 4-way entry label,
+      opposite-signal exit only (max_holding, stop_loss, take_profit all None).
+    - Signal computed on candles[:index]; filled at candles[index].open.
+    - Exactly one open position at all times, enforced twice.
+    - quantity = (cash * risk_fraction) / fill, risk_fraction of CURRENT cash.
+    - cost_deduction: fee 0.001, slippage 0.0005 per leg, spread forced 0.0.
+    - 6 paper modes, all implemented: standard, ai_intelligence, alerts,
+      daily_target, manual, high_risk.
+    - ai_intelligence is a DETERMINISTIC 0-100 gate (threshold 90), NOT an LLM.
+    - ExecutionPolicy seam already provides 5 distinct abstention mechanisms.
+    - NO cooldown, daily-loss, consecutive-loss or drawdown-halt guard exists.
+    - Walk-forward provides 11 leakage guards, all raising rather than warning.
+
+  Recorded results reused (no new calculation)
+    - Phase 7 in-sample 2024-2025 : 344 trades, net -157.14, PF 0.6920
+    - Phase 10 OOS 2026-01..08    : 105 trades, net +5.05, PF 1.0424,
+                                    95% CI [-0.6688, +0.7649], median trade -0.89
+    - Phase 13 walk-forward        : 267 trades, net -133.86, PF < 1.0 in ALL
+                                    SIX windows, 0 of 6 windows positive
+    - Phase 14C entry-context      : all |rho| <= 0.21, NO confidence interval
+    - Phase 30B spent holdout      : 20 trades, net -12.32, PF 0.4925 net /
+                                    0.6805 gross, median trade -1.4220,
+                                    INCONCLUSIVE (pre-declared)
+    - Standing conclusion UNCHANGED: no reliable profitability established
+      (RESEARCH_STATE.json:14).
+
+  Documentation corrections found during this phase
+    - There is NO experiments/phase14C/ directory. The Phase 14C work lives at
+      experiments/phase14/SUMMARY.md.
+    - The repository contains phases beyond 15: phase29, phase30, phase31.
+
+================================================================================
+5. BINDING CONSTRAINT RECORDED
+================================================================================
+
+  RESEARCH_CHECKPOINT.md:417-428 states no genuinely unused validation data
+  remains. Phase 29 acquired 2026-09..10; Phase 30 consumed it. As of Phase 32
+  there is NO unseen data anywhere in the project.
+
+  Roadmap phase R1 (acquire fresh provenance-documented data) is therefore a
+  HARD BLOCKER on every evaluation phase. This is recorded in ROADMAP.md and
+  EVALUATION_PROTOCOL.md.
+
+  The spent Phase 30B holdout must never be reused as fresh validation.
+
+================================================================================
+6. GIT STATUS
+================================================================================
+
+  Recorded BEFORE the phase and re-checked AFTER:
+
+    HEAD                          dccebbd53ee8365474345506db9099b13356b53c  (unchanged)
+    branch                        main
+    origin/main                   dccebbd53ee8365474345506db9099b13356b53c  (unchanged)
+    commits ahead of origin/main  0     (no commit occurred)
+    staged files                  0     (nothing staged)
+    modified tracked files        0
+    deleted tracked files         0
+    stash entries                 0
+
+  Untracked files: 38 before, 43 after (the 5 new Phase 32 files).
+  No pre-existing untracked file was modified or removed.
+
+  Breakdown of untracked files AFTER this phase:
+    data/oos frozen artefacts (Phase 29A-C)                  30
+    experiments/phase29/PREREGISTRATION.md                     1
+    experiments/phase30/  (4 Phase 30B result files)          4
+    experiments/phase31/  (3 Phase 31 analysis files)         3
+    experiments/phase32/  (5 new Phase 32 files)              5
+    TOTAL                                                     43
+
+  New files created by Phase 32:
+    research_engine/experiments/phase32/RESEARCH_PLAN.md
+    research_engine/experiments/phase32/AI_ARCHITECTURE.md
+    research_engine/experiments/phase32/EVALUATION_PROTOCOL.md
+    research_engine/experiments/phase32/ROADMAP.md
+    research_engine/experiments/phase32/VERIFICATION.txt
+
+================================================================================
+7. SCOPE LIMITS DECLARED IN THE DELIVERABLES
+================================================================================
+
+  Every provider-specific question is marked [VERIFY] and is unresolved:
+    model ids and versioning; structured-output support; per-token pricing for
+    input and output; rate limits and tiering; data-retention and training-use
+    terms; model-version pinning; news source licensing and historical depth;
+    whether an economic calendar offers as-known-at-the-time data; sentiment
+    vendor methodology; forex venue, licence and session/DST semantics;
+    economic viability of retrospective analysis; regional availability; and the
+    identity of "the existing AI".
+
+  NO price, quota or capability is asserted anywhere. NO acceptance threshold is
+  invented; thresholds are deferred to a preregistration.
+
+  The deliverables contain no profitability claim. They state that the strategy
+  has NOT been shown profitable, that gross P&L is negative before costs, and
+  that lower costs alone cannot fix a negative gross result.
+
+================================================================================
+END OF VERIFICATION RECORD
+================================================================================

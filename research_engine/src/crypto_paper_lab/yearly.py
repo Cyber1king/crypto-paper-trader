@@ -26,8 +26,14 @@ def run_yearly_backtests(
     config: StrategyConfig = StrategyConfig(),
     starting_balance: float = 10_000.0,
     risk_fraction: float = 0.01,
+    research_context: object | None = None,
 ) -> dict[int, dict[str, float | int]]:
-    """Run the same paper strategy separately for each calendar year."""
+    """Run the same paper strategy separately for each calendar year.
+
+    ``research_context`` is forwarded. Note that per-year splitting produces
+    windows no single reservation can describe, so a research evaluation over
+    this function is refused by the guard rather than half-evaluated.
+    """
 
     yearly_results: dict[int, dict[str, float | int]] = {}
 
@@ -43,6 +49,7 @@ def run_yearly_backtests(
             config=config,
             starting_balance=starting_balance,
             risk_fraction=risk_fraction,
+            research_context=research_context,
         )
 
         yearly_results[year] = create_report(result)

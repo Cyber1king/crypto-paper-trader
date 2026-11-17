@@ -1,0 +1,72 @@
+{
+  "schema_version": "safe-test-allowlist/1",
+  "description": "Explicit permission for running research-engine tests. Permission is granted ONLY by the entries below. Directory membership, filename similarity, and the absence of an exclusion record are NOT permission. An empty target list is not permission to discover.",
+  "generated_from": "research_engine/experiments/phase101/excluded_test_audit.json",
+  "test_root": "research_engine",
+  "pytest_entrypoint": "python -m pytest",
+
+  "allowed_files": [
+    "tests/test_market_cost_profiles.py",
+    "tests/test_market_integration.py",
+    "tests/test_mode_consistency.py",
+    "tests/test_ai_offline.py",
+    "tests/test_ai_offline_hardening.py",
+    "tests/test_ai_offline_budget_contention.py",
+    "tests/test_ai_providers.py",
+    "tests/test_ai_research.py",
+    "tests/test_session_isolation.py",
+    "tests/test_api_status_reporting.py",
+    "tests/test_evidence_schema.py",
+    "tests/test_registry_locking.py",
+    "tests/test_crash_recovery.py",
+    "tests/test_cross_process_guard.py",
+    "tests/test_reservation_single_use.py",
+    "tests/test_registry_schema.py"
+  ],
+
+  "allowed_node_ids": [],
+
+  "blocked_pending_review": [
+    "tests/test_paper_flow_contract.py"
+  ],
+
+  "explicitly_denied_files": [
+    "tests/test_replay.py"
+  ],
+
+  "explicitly_denied_node_ids": [],
+
+  "groups": {
+    "T": [
+      "tests/test_market_cost_profiles.py",
+      "tests/test_market_integration.py",
+      "tests/test_mode_consistency.py",
+      "tests/test_ai_offline.py",
+      "tests/test_ai_offline_hardening.py",
+      "tests/test_ai_offline_budget_contention.py",
+      "tests/test_ai_providers.py",
+      "tests/test_ai_research.py",
+      "tests/test_session_isolation.py",
+      "tests/test_api_status_reporting.py",
+      "tests/test_evidence_schema.py"
+    ],
+    "CI": [
+      "tests/test_registry_locking.py",
+      "tests/test_crash_recovery.py",
+      "tests/test_cross_process_guard.py",
+      "tests/test_reservation_single_use.py",
+      "tests/test_registry_schema.py"
+    ],
+    "T_BLOCKED": [
+      "tests/test_paper_flow_contract.py"
+    ]
+  },
+
+  "review": {
+    "note": "Each allowed entry was confirmed to have zero records in the exclusion audit by static text inspection only. Zero excluded records is NECESSARY, not SUFFICIENT: it says no record in that file reaches a forbidden entry point. It does not by itself prove the file is safe to execute, because fixtures and shared module state can carry behaviour a name-based audit cannot see.",
+    "blocked_reason": "tests/test_paper_flow_contract.py has a recorded order-dependent history: it passed in isolation and within its own file, and failed when run alongside another module. paper_api/__init__.py constructs an application at import time, so module-level state is shared across files in one pytest process. Zero excluded records does not clear that. It requires manual isolation review before any execution.",
+    "added_without_execution": true,
+    "gate_has_never_been_run": true,
+    "requires_human_review_before_first_run": true
+  }
+}

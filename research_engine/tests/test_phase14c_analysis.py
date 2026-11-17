@@ -44,6 +44,7 @@ from crypto_paper_lab.walkforward import (
     a2_config,
     baseline_config,
     config_hash,
+    DATASET_FINGERPRINT_SCHEMA_VERSION,
     dataset_fingerprint,
     phase13_costs,
     resolve_windows,
@@ -805,9 +806,15 @@ def test_dataset_hash_matches_the_frozen_constant() -> None:
 
 @pytest.mark.slow
 def test_dataset_fingerprint_is_unchanged(candles) -> None:
-    assert dataset_fingerprint(candles) == (
-        DATASET_CANDLES, DATASET_FIRST, DATASET_LAST
-    )
+    identity = dataset_fingerprint(candles)
+    # Migrated from the tuple form (count, first, last) when the fingerprint
+    # gained a content digest. The bounds assertion is unchanged; a content
+    # assertion is now added alongside it rather than instead of it.
+    assert identity.count == DATASET_CANDLES
+    assert identity.first == DATASET_FIRST
+    assert identity.last == DATASET_LAST
+    assert identity.schema_version == DATASET_FINGERPRINT_SCHEMA_VERSION
+    assert len(identity.content_sha256) == 64
     assert len(candles) == 17544
 
 

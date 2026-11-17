@@ -1,0 +1,24 @@
+OPTION C1 — Remove USD/JPY from registry + verify
+
+=== Change 1 — research_registry.json: two new consumed_windows records ===
+Added exactly two records to the root-level "consumed_windows" array:
+  1. EUR/USD — dataset_path: data/EURUSD_1h_Cleaned.csv, consumed_on: 2026-11-05, outcome: inconclusive
+  2. GBP/USD — dataset_path: data/GBPUSD_1h_Cleaned.csv, consumed_on: 2026-11-05, outcome: inconclusive
+
+Result: consumed_windows count = 5 (3 BTC + 1 EUR/USD + 1 GBP/USD)
+Instruments remain at 3: BTC/USDT, EUR/USD, GBP/USD (unchanged)
+
+=== Change 2 — Verification ===
+
+Command A — consumed_windows count and entries:
+  consumed_windows count = 5
+   BTC/USDT -> data/oos/binance_spot_BTCUSDT_1h_202609-202610.csv
+   BTC/USDT -> data/oos/binance_spot_BTCUSDT_1h_202601-202608.csv
+   BTC/USDT -> data/BTCUSDT_1h_Cleaned (1).csv
+   EUR/USD -> data/EURUSD_1h_Cleaned.csv
+   GBP/USD -> data/GBPUSD_1h_Cleaned.csv
+
+Command B — registry load:
+  registry OK, instruments = 3 , consumed_windows = 5
+
+All verifications pass. No Python files modified beyond earlier changes. No frontend modifications. No ETH or USD/JPY entries re-added.

@@ -1,0 +1,68 @@
+FINAL REPORT
+
+=== PART 1 — Import Revert: COMPLETE ===
+- dataset.py line 3: from datetime import datetime (reverted from import datetime)
+- Added timedelta to import: from datetime import datetime, timedelta
+- Replaced all datetime.timedelta( with timedelta(
+- This fix resolves the AttributeError: type object 'datetime.datetime' has no attribute 'timedelta'
+
+=== PART 2 — Weekend Filter in download_forex.py: IMPLEMENTED ===
+- Filter rules applied using datetime.weekday() and datetime.hour:
+  * Sunday (weekday=6): KEEP hours 22:00 and 23:00 only
+  * Monday–Thursday (0-3): KEEP all hours
+  * Friday (weekday=4): KEEP hours 00:00 through 21:00 only
+  * Saturday (weekday=5): REMOVE all hours
+- The filter ensures timestamps are within Forex open hours
+- However, the resulting gaps between Friday 21:00 and Monday 00:00 contain
+  Sunday 22:00 UTC (market open), which the session-aware gap checking
+  correctly identifies as real missing data
+
+=== PART 3 — Verification: THREE FAILURES ===
+Running the verification command:
+```
+cd research_engine
+$env:PYTHONPATH = "src"
+python -c "from crypto_paper_lab.dataset import validate_dataset; from crypto_paper_lab.data import load_ohlcv_csv; import pathlib; [validate_dataset(load_ohlcv_csv(pathlib.Path(p)), expected_interval_seconds=3600, market_type='forex_spot') or print(p + ' OK') for p in ['data/EURUSD_1h_Cleaned.csv','data/GBPUSD_1h_Cleaned.csv','data/USDJPY_1h_Cleaned.csv']]"
+```
+
+ALL THREE RAISE ValueError:
+
+EURUSD: dataset contains a non-uniform interval: expected 3600s, found 183600s between 2026-10-23 21:00:00 and 2026-10-26 00:00:00: open market hour 2026-10-25T22:00:00 falls inside the gap
+
+GBPUSD: dataset contains a non-uniform interval: expected 3600s, found 183600s between 2026-10-23 21:00:00 and 2026-10-26 00:00:00: open market hour 2026-10-25T22:00:00 falls inside the gap
+
+USDJPY: dataset contains a non-uniform interval: expected 3600s, found 183600s between 2026-10-09 20:00:00 and 2026-10-11 23:00:00: open market hour 2026-10-09T21:00:00 falls inside the gap
+
+The gaps are between Friday 21:00 and Monday 00:00, spanning a weekend. The session-aware gap checking correctly identifies that Sunday 22:00 UTC (market open hour) falls inside the gap, meaning the gap represents real missing data, not a valid weekend closure.
+
+=== WHAT WORKS ===
+- BTC OK: crypto_spot with expected_interval_seconds=3600 passes strict uniform interval check
+- EURUSD OK: With forex_spot and no gap issues, passes (confirmed with original data before download_forex.py was run)
+
+=== THE FUNDAMENTAL ISSUE ===
+The weekend filter rules create inter-day gaps (Friday 21:00 → Monday 00:00) that contain
+Sunday 22:00 UTC (market open hour). The session-aware gap checking in validate_dataset
+correctly identifies these as containing real missing data and raises ValueError.
+
+This is the correct behavior for the new feature — the gap is not a valid weekend
+closure because the market was open at 22:00 UTC on Sunday.
+
+=== FILES MODIFIED ===
+1. research_engine/src/crypto_paper_lab/dataset.py — Import fix + session-aware gap checking
+2. research_engine/src/paper_api/marketdata.py — market_type parameter (2 changes)
+3. research_engine/src/crypto_paper_lab/dataset.py — session-aware gap checking block (lines 319-322)
+4. artifacts/crypto-paper-lab/src/components/market-chart.tsx — TypeScript TS1005 fix
+5. artifacts/crypto-paper-lab/src/lib/hooks.ts — TypeScript TS2554 fixes
+6. artifacts/crypto-paper-lab/src/pages/dashboard.tsx — TypeScript TS2322 fix with as string cast
+7. artifacts/crypto-paper-lab/src/pages/market.tsx — Updated useMarket call
+8. artifacts/crypto-paper-lab/src/pages/portfolio.tsx — Updated useReplayState call
+9. artifacts/crypto-paper-lab/src/pages/signals.tsx — Updated useReplayState call
+
+=== SUMMARY ===
+- Import revert: COMPLETE
+- Session-aware gap checking: IMPLEMENTED in dataset.py
+- download_forex.py: IMPLEMENTED with weekend filter
+- Verification: THREE ValueError (gaps contain open market hours)
+- BTC verification: PASSES (crypto_spot, strict uniform interval)
+- EURUSD verification: PASSES (with original data, forex_spot without gap issues)
+- TypeScript: ALL 3 errors FIXED, tsc --noEmit outputs EMPTY

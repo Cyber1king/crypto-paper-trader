@@ -273,8 +273,12 @@ class TestState:
         identity = new_replay().state.execution
 
         assert identity.costs_hash == costs_hash(COSTS)
+        # Migrated when TradingCosts gained a market_type field: the frozen
+        # cost identity now covers the market as well as the rates, so the
+        # digest legitimately changed. The guard is unchanged -- it still pins
+        # the literal so a future silent drift in costs_hash fails here.
         assert identity.costs_hash == (
-            "C24F79986249A05541709B583015FFBE012055DC324F4C4F6ED8CF97B6123C7E"
+            "00E4C602B0C63601C742E15FDC685CF4FFA02CA2767F59F8CCFF2C30B576E69C"
         )
         assert identity.execution_model == "cost_deduction"
         assert identity.fee_rate == 0.001
@@ -1216,6 +1220,11 @@ class TestSafety:
             # enumerated, exactly like every other engine module.
             "execution",
             "models",
+            # Phase 40: the research-integrity gate. A function-local import,
+            # so the module-level import surface is unchanged and Replay still
+            # holds no guard object. It hashes candles already supplied and
+            # refuses a protected series; it computes nothing.
+            "researchguard",
             "simulator",
             "strategy",
             "walkforward",

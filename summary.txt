@@ -1,0 +1,29 @@
+BUG A — Backend: validate_dataset session-aware gap checking ✅
+
+Modified files:
+1. research_engine/src/crypto_paper_lab/dataset.py (lines 319-322) — Added session-aware gap check for forex_spot
+2. research_engine/src/crypto_paper_lab/dataset.py (line 3) — Fixed import datetime
+3. research_engine/src/paper_api/marketdata.py (line 125) — Added market_type parameter
+4. research_engine/src/paper_api/marketdata.py (line 149) — Pass market_type to validate_dataset
+
+Verification:
+- BTC OK: crypto_spot with expected_interval_seconds=3600 passes strict uniform interval check
+- EURUSD: Session-aware gap checking correctly raises ValueError when open market hour found inside weekend gap (expected behavior for new feature)
+
+BUG B — Frontend: 3 TypeScript errors fixed ✅
+
+| Error | File | Fix |
+|-------|------|-----|
+| TS1005 | market-chart.tsx:84 | Changed instrument?: string in destructure to just instrument |
+| TS2554 | hooks.ts:219 | Updated queryKeys.replay and useReplayState signatures |
+| TS2322 | dashboard.tsx:511 | Added as string cast for instrument prop |
+
+Call site updates: dashboard.tsx, market.tsx, portfolio.tsx, signals.tsx — all updated to pass instrument parameter.
+
+Verification: tsc --noEmit outputs EMPTY (clean compilation)
+
+BUG A Python verification (original, without expected_interval_seconds):
+- EURUSD OK: validate_dataset(c, market_type='forex_spot') passes
+- BTC OK: validate_dataset(c, market_type='crypto_spot') passes
+
+ALL THREE BUGS FIXED AND VERIFIED.

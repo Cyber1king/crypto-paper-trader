@@ -1,0 +1,65 @@
+================================================================================================
+PHASE 30B - FROZEN BASELINE HOLDOUT EVALUATION - RESULTS
+================================================================================================
+
+Run once, exactly as pre-registered in experiments/phase29/PREREGISTRATION.md 6.6.
+Baseline StrategyConfig() defaults only. No A2. No multi-configuration harness.
+
+FROZEN INPUTS
+  dataset path          : data/oos/binance_spot_BTCUSDT_1h_202609-202610.csv
+  dataset sha256        : c475e541c9c8fb393713854e1640d3a2a029100472dc677e9fe11f3e42a8f99b
+  dataset rows          : 912
+  dataset range (UTC)   : 2026-09-01 00:00:00 .. 2026-10-08 23:00:00
+  preregistration       : experiments/phase29/PREREGISTRATION.md
+  preregistration sha256: b06f36e21df0fe403e3a75cbf8c3de84161607348966d622b65ea3f51bf217cc
+  git commit            : dccebbd53ee8365474345506db9099b13356b53c
+
+CONFIGURATION (frozen)
+  config_repr           : StrategyConfig(asset='BTC/USDT', timeframe='1h', lookback=20, fast_period=5, slow_period=12, breakout_buffer=0.001, retest_tolerance=0.002, min_breakout_distance=0.0, trend_strength_min=0.001, retest_use_close=False, breakout_confirm_bars=1, max_holding_bars=None, stop_loss_pct=None, take_profit_pct=None, allowed_sides=None)
+  execution_model       : cost_deduction
+  fee_rate              : 0.001
+  slippage_rate         : 0.0005
+  spread_rate           : 0.0
+  starting_balance      : 10000.0
+  risk_fraction         : 0.01
+  evaluation_start      : 48
+  warmup_rule           : full_preceding_series
+  boundary_policy       : retain_boundary_force_closes
+  configurations_run    : baseline only
+
+EVALUATION WINDOW
+  warm-up context       : 2026-09-01 00:00:00 .. 2026-09-02 23:00:00  (48 bars, no trades)
+  first evaluable bar   : 2026-09-03 00:00:00
+  last bar              : 2026-10-08 23:00:00
+  evaluated candles     : 864
+
+HEADLINE METRICS
+  trade count           : 20
+  net P&L after costs   : -12.32
+  return from 10000.0   : -0.1232%
+  ending balance        : 9987.68
+  win rate              : 25.00%  (5W/15L/0flat)
+  profit factor         : 0.4925
+  max drawdown (closed) : 0.1577%
+  average P&L per trade : -0.6161
+  gross P&L             : -6.32
+  total friction        : 6.00
+    fees                : 4.00
+    spread              : 0.00
+    slippage            : 2.00
+  exit counts           : {'opposite_signal': 19, 'end_of_data': 1}
+
+MONTHLY BREAKDOWN (by entry month)
+  2026-09  trades= 17  net=   -12.41  gross=    -7.30  costs=   5.11  ret= -0.1241%  4W/13L  negative
+  2026-10  trades=  3  net=     0.09  gross=     0.98  costs=   0.89  ret=  0.0009%  1W/2L  positive
+
+UNCERTAINTY (section 10.5 heuristic - NOT a p-value, NOT a t-test)
+  n                     : 20
+  mean net per trade    : -0.6161
+  stdev                 : 2.0307
+  stderr                : 0.4541
+  mean/SE               : -1.3569
+  95% band              : [-1.5061, +0.2738]
+  This is a heuristic ratio only. No p-value is reported, no significance
+  test is performed, and trades are not independent observations.
+
