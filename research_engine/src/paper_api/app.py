@@ -38,6 +38,8 @@ wallet, no credentials.
 """
 from __future__ import annotations
 
+import os
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -72,6 +74,7 @@ from crypto_paper_lab.modes import (
     mode_spec,
 )
 from crypto_paper_lab.walkforward import config_hash
+from crypto_paper_lab.paths import research_engine_root
 
 from . import marketdata, perfstats, research_view, signals
 from .config import ApiConfig, config_from_env, SERVICE_NAME
@@ -781,6 +784,75 @@ def create_app(
                 EvidenceSourceModel(**s) for s in payload["sources_evaluated"]
             ],
         )
+
+    @app.get("/api/research/experiments", tags=["research"])
+    def research_experiments() -> dict:
+        """List whitelisted result files in numbered research experiment phases."""
+        experiments_root = (research_engine_root() / "experiments").resolve()
+        if not experiments_root.is_dir():
+            return {"phases": []}
+
+        phase_dirs = []
+        for candidate in experiments_root.iterdir():
+            match = re.fullmatch(r"phase(\d+)", candidate.name)
+            if not match or not candidate.is_dir():
+                continue
+            resolved_phase = candidate.resolve()
+            if experiments_root not in resolved_phase.parents:
+                continue
+            phase_dirs.append((int(match.group(1)), candidate, resolved_phase))
+
+        phases = []
+        for _number, candidate, resolved_phase in sorted(
+            phase_dirs, key=lambda item: item[0]
+        ):
+            files = []
+            for result_file in resolved_phase.iterdir():
+                if not result_file.is_file() or result_file.suffix.lower() not in {
+                    ".json", ".txt", ".csv"
+                }:
+                    continue
+                resolved_file = result_file.resolve()
+                if resolved_phase not in resolved_file.parents:
+                    continue
+                files.append(
+                    {"name": result_file.name, "size_bytes": os.path.getsize(resolved_file)}
+                )
+            files.sort(key=lambda item: item["name"].lower())
+            phases.append({"phase": candidate.name, "files": files})
+
+        return {"phases": phases}
+
+    @app.get("/api/research/experiments/{phase}/{filename}", tags=["research"])
+    def research_experiment_file(phase: str, filename: str) -> dict:
+        """Read one small, whitelisted experiment result file as raw UTF-8 text."""
+        if re.fullmatch(r"phase\d+", phase) is None:
+            raise HTTPException(status_code=400, detail="invalid phase name")
+        if re.fullmatch(r"[A-Za-z0-9_.\-]+\.(json|txt|csv)", filename) is None:
+            raise HTTPException(status_code=400, detail="invalid result filename")
+
+        experiments_root = (research_engine_root() / "experiments").resolve()
+        phase_root = experiments_root / phase
+        resolved_phase_root = phase_root.resolve()
+        if experiments_root not in resolved_phase_root.parents:
+            raise HTTPException(status_code=403, detail="result path is outside the experiments directory")
+
+        result_path = (resolved_phase_root / filename).resolve()
+        if resolved_phase_root not in result_path.parents:
+            raise HTTPException(status_code=403, detail="result path is outside the phase directory")
+        if not result_path.is_file():
+            raise HTTPException(status_code=404, detail="experiment result file not found")
+
+        size_bytes = os.path.getsize(result_path)
+        if size_bytes > 2 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="File too large to display")
+
+        return {
+            "phase": phase,
+            "filename": filename,
+            "content": result_path.read_text(encoding="utf-8"),
+            "size_bytes": size_bytes,
+        }
 
     @app.get("/api/modes", response_model=ModesResponse, tags=["modes"])
     def available_modes() -> ModesResponse:
