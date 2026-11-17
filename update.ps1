@@ -53,10 +53,10 @@ function Invoke-UpdateStep {
     }
 }
 
-$commitPlan = "git add -A; git commit -m `"$CommitMessage`""
+$commitPlan = "git add -u; git commit -m `"$CommitMessage`""
 Invoke-UpdateStep -Number 1 -Name "Git add and commit" -Label "Staging and committing..." -Plan $commitPlan -Action {
-    git add -A
-    if ($LASTEXITCODE -ne 0) { throw "git add -A failed with exit code $LASTEXITCODE." }
+    git add -u
+    if ($LASTEXITCODE -ne 0) { throw "git add -u failed with exit code $LASTEXITCODE." }
     git commit -m $CommitMessage
     if ($LASTEXITCODE -ne 0) { throw "git commit failed with exit code $LASTEXITCODE." }
 }
@@ -81,6 +81,9 @@ if ($SkipInstall) {
 }
 else {
     Invoke-UpdateStep -Number 5 -Name "Install updated app" -Label "Installing updated app..." -Plan 'Start-Process "Output\CryptoPaperLab-Setup.exe" -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART" -Wait' -Action {
+        # Kill the running app so the installer can overwrite it
+        Get-Process -Name CryptoPaperLab -ErrorAction SilentlyContinue | Stop-Process -Force
+        Start-Sleep -Seconds 2
         $installer = Start-Process "Output\CryptoPaperLab-Setup.exe" -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART" -Wait -PassThru
         if ($installer.ExitCode -ne 0) {
             throw "Installer returned exit code $($installer.ExitCode)."

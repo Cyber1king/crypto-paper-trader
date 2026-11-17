@@ -90,3 +90,26 @@ research_engine/data/assistant_history.json
 
 # Debug artifacts from running the packaged .exe
 exe_run.log
+
+# Debug scripts from AI agents (must never be committed)
+check_*.py
+fix_*.py
+mod_*.py
+verify_*.py
+# but keep real research experiment scripts
+!research_engine/experiments/phase*/verify_*.py
+
+# Backup folders from AI agent work
+artifacts/crypto-paper-lab.backup-*
+
+# Build artifacts (in addition to dist/ which is already ignored)
+Output/
+build/
+
+# Junk files
+0
+x.txt
+summary.txt
+test.txt
+report.txt
+installer.log
