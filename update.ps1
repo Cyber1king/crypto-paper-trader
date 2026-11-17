@@ -63,6 +63,7 @@ Invoke-UpdateStep -Number 1 -Name "Git add and commit" -Label "Staging and commi
         # Exit code 1 with "nothing to commit" is not a failure — it means the tree was already clean.
         if ($commitOutput -match "nothing to commit" -or $commitOutput -match "no changes added to commit") {
             Write-Host "       No changes to commit (working tree was already clean). Continuing."
+            $global:LASTEXITCODE = 0
         } else {
             throw "git commit failed with exit code $LASTEXITCODE."
         }
