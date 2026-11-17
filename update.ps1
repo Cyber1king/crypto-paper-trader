@@ -57,8 +57,16 @@ $commitPlan = "git add -u; git commit -m `"$CommitMessage`""
 Invoke-UpdateStep -Number 1 -Name "Git add and commit" -Label "Staging and committing..." -Plan $commitPlan -Action {
     git add -u
     if ($LASTEXITCODE -ne 0) { throw "git add -u failed with exit code $LASTEXITCODE." }
-    git commit -m $CommitMessage
-    if ($LASTEXITCODE -ne 0) { throw "git commit failed with exit code $LASTEXITCODE." }
+    $commitOutput = git commit -m $CommitMessage 2>&1 | Out-String
+    Write-Host $commitOutput.TrimEnd()
+    if ($LASTEXITCODE -ne 0) {
+        # Exit code 1 with "nothing to commit" is not a failure — it means the tree was already clean.
+        if ($commitOutput -match "nothing to commit" -or $commitOutput -match "no changes added to commit") {
+            Write-Host "       No changes to commit (working tree was already clean). Continuing."
+        } else {
+            throw "git commit failed with exit code $LASTEXITCODE."
+        }
+    }
 }
 
 Invoke-UpdateStep -Number 2 -Name "Git push" -Label "Pushing to GitHub..." -Plan "git push origin main" -Action {
