@@ -7,6 +7,7 @@ REPO_ROOT = os.path.abspath(os.getcwd())
 # Data files that must be bundled
 datas = [
     (os.path.join(REPO_ROOT, "research_engine", "data"), "research_engine/data"),
+    (os.path.join(REPO_ROOT, "research_engine", "experiments"), "research_engine/experiments"),
     (os.path.join(REPO_ROOT, "artifacts", "crypto-paper-lab", "dist", "public"), "frontend_dist"),
 ]
 
