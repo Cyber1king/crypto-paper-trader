@@ -1,5 +1,6 @@
 import os
 import socket
+import subprocess
 import sys
 import threading
 import time
@@ -45,6 +46,18 @@ def _wait_for_server(host="127.0.0.1", port=8000, timeout=60.0) -> bool:
     return False
 
 
+def _launch_mt5():
+    try:
+        mt5_path = os.environ.get("MT5_PATH", r"C:\MT5\terminal64.exe")
+        if os.path.isfile(mt5_path):
+            _log(f"launching MT5 from {mt5_path}")
+            subprocess.Popen([mt5_path, "/portable"])
+        else:
+            _log(f"MT5 path not found: {mt5_path}")
+    except Exception:
+        _log("failed to launch MT5: " + traceback.format_exc())
+
+
 def main():
     if sys.stdout is None:
         sys.stdout = open(os.devnull, "w", encoding="utf-8")
@@ -54,6 +67,8 @@ def main():
     os.environ.setdefault("LIVE_TRADING_ENABLED", "true")
     os.environ.setdefault("ASSISTANT_FAKE_LLM", "true")
     _log("launcher start")
+
+    _launch_mt5()
 
     thread = threading.Thread(target=_start_server, daemon=True)
     thread.start()

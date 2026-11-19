@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+import os
 import time
 from uuid import uuid4
 
@@ -44,6 +45,8 @@ class MT5Config:
     )
     magic: int = 505852
     deviation_points: int = 20
+    terminal_path: str = r"C:\MT5\terminal64.exe"
+    portable: bool = True
 
 
 class MT5LiveBroker(LiveBroker):
@@ -70,7 +73,12 @@ class MT5LiveBroker(LiveBroker):
                 raise BrokerUnavailable(f"MetaTrader5 package unavailable: {exc}") from exc
             self._mt5 = mt5
         try:
-            initialized = self._mt5.initialize()
+            init_kwargs: dict = {}
+            if os.path.isfile(self.config.terminal_path):
+                init_kwargs["path"] = self.config.terminal_path
+                init_kwargs["portable"] = self.config.portable
+                init_kwargs["timeout"] = 60000
+            initialized = self._mt5.initialize(**init_kwargs)
         except Exception as exc:
             raise BrokerUnavailable(f"MT5 initialize failed: {exc}") from exc
         if not initialized:
