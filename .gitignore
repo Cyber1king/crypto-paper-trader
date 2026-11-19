@@ -113,3 +113,8 @@ summary.txt
 test.txt
 report.txt
 installer.log
+
+# Backend log files from debugging
+backend.log
+research_engine/backend.log
+*.log
