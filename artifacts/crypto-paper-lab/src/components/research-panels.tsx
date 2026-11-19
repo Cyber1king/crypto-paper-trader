@@ -47,6 +47,7 @@ import {
 } from "lucide-react";
 
 import { Badge } from "@/components/ui";
+import { ExperimentResultsPanel } from "@/components/experiment-results-panel";
 import { Panel } from "@/components/state";
 import type {
   ResearchConsumedWindow,
@@ -476,6 +477,7 @@ export function GovernancePanel({
   governance,
   isLoading,
   isError,
+  windowPhaseMap,
 }: {
   governance:
     | {
@@ -498,6 +500,7 @@ export function GovernancePanel({
     | undefined;
   isLoading: boolean;
   isError: boolean;
+  windowPhaseMap?: Readonly<Record<string, readonly string[]>>;
 }) {
   return (
     <Panel
@@ -620,32 +623,53 @@ export function GovernancePanel({
                         <th scope="col" className="py-1 font-medium">
                           State
                         </th>
+                        {windowPhaseMap && (
+                          <th scope="col" className="py-1 pl-2 font-medium">
+                            Results
+                          </th>
+                        )}
                       </tr>
                     </thead>
                     <tbody>
-                      {governance.consumed_windows.map((window) => (
-                        <tr
-                          key={window.dataset_sha256}
-                          data-testid={`consumed-${window.instrument_id.replace("/", "-")}-${window.evaluation_first ?? "unknown"}`}
-                          className="border-b border-border/50"
-                        >
-                          <td className="py-1.5 pr-2 font-mono">
-                            {window.instrument_id}
-                          </td>
-                          <td className="py-1.5 pr-2 text-muted-foreground">
-                            {field(window.evaluation_first)} →{" "}
-                            {field(window.evaluation_last)}
-                          </td>
-                          <td className="py-1.5 pr-2 font-mono">
-                            {field(window.outcome)}
-                          </td>
-                          <td className="py-1.5">
-                            <StatusLabel tone="neutral" testId="retired">
-                              {window.retired ? "RETIRED" : "UNKNOWN"}
-                            </StatusLabel>
-                          </td>
-                        </tr>
-                      ))}
+                      {governance.consumed_windows.map((window) => {
+                        const windowKey = `${window.instrument_id}|${window.evaluation_first ?? ""}|${window.evaluation_last ?? ""}`;
+                        const phases = windowPhaseMap?.[windowKey];
+                        const forexWindow = window.instrument_id === "EUR/USD" || window.instrument_id === "GBP/USD";
+                        return (
+                          <tr
+                            key={window.dataset_sha256}
+                            data-testid={`consumed-${window.instrument_id.replace("/", "-")}-${window.evaluation_first ?? "unknown"}`}
+                            className="border-b border-border/50"
+                          >
+                            <td className="py-1.5 pr-2 font-mono">
+                              {window.instrument_id}
+                            </td>
+                            <td className="py-1.5 pr-2 text-muted-foreground">
+                              {field(window.evaluation_first)} →{" "}
+                              {field(window.evaluation_last)}
+                            </td>
+                            <td className="py-1.5 pr-2 font-mono">
+                              {field(window.outcome)}
+                            </td>
+                            <td className="py-1.5">
+                              <StatusLabel tone="neutral" testId="retired">
+                                {window.retired ? "RETIRED" : "UNKNOWN"}
+                              </StatusLabel>
+                            </td>
+                            {windowPhaseMap && (
+                              <td className="py-1.5 pl-2">
+                                {phases ? (
+                                  <ExperimentResultsPanel windowKey={windowKey} phases={phases} />
+                                ) : forexWindow ? (
+                                  <span className="text-muted-foreground">
+                                    No experiment results recorded for this window. Data consumed for pipeline validation.
+                                  </span>
+                                ) : null}
+                              </td>
+                            )}
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>

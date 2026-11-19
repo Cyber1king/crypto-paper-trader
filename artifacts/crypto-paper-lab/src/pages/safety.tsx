@@ -2,6 +2,12 @@ import { GovernancePanel } from '@/components/research-panels';
 import { PaperOnlyBanner } from '@/components/state';
 import { useResearchGovernance } from '@/lib/hooks';
 
+const WINDOW_PHASE_MAP: Record<string, readonly string[]> = {
+  'BTC/USDT|2024-01-01T00:00:00|2025-12-31T23:00:00': ['phase5', 'phase6', 'phase7', 'phase8'],
+  'BTC/USDT|2026-01-01T00:00:00|2026-08-31T23:00:00': ['phase10', 'phase11'],
+  'BTC/USDT|2026-09-01T00:00:00|2026-10-08T23:00:00': ['phase29', 'phase30'],
+};
+
 export function Safety() {
   const researchGovernance = useResearchGovernance();
 
@@ -30,6 +36,7 @@ export function Safety() {
             governance={researchGovernance.data}
             isLoading={researchGovernance.isLoading}
             isError={researchGovernance.isError}
+            windowPhaseMap={WINDOW_PHASE_MAP}
           />
         </section>
       </main>

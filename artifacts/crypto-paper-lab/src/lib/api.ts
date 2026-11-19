@@ -902,6 +902,27 @@ export interface ResearchGovernanceResponse {
   registry_version: number | null;
 }
 
+export interface ExperimentFileEntry {
+  readonly name: string;
+  readonly size_bytes: number;
+}
+
+export interface ExperimentPhase {
+  readonly phase: string;
+  readonly files: readonly ExperimentFileEntry[];
+}
+
+export interface ExperimentsResponse {
+  readonly phases: readonly ExperimentPhase[];
+}
+
+export interface ExperimentFileResponse {
+  readonly phase: string;
+  readonly filename: string;
+  readonly content: string;
+  readonly size_bytes: number;
+}
+
 /**
  * AI research provider status.
  *
@@ -1075,6 +1096,25 @@ export class PaperApi {
     return this.request<ResearchEvidenceResponse>(
       "GET",
       "/api/research/evidence",
+      undefined,
+      signal,
+    );
+  }
+
+  async getExperiments(signal?: AbortSignal): Promise<ExperimentsResponse> {
+    return this.request<ExperimentsResponse>(
+      "GET", "/api/research/experiments", undefined, signal,
+    );
+  }
+
+  async getExperimentFile(
+    phase: string,
+    filename: string,
+    signal?: AbortSignal,
+  ): Promise<ExperimentFileResponse> {
+    return this.request<ExperimentFileResponse>(
+      "GET",
+      `/api/research/experiments/${encodeURIComponent(phase)}/${encodeURIComponent(filename)}`,
       undefined,
       signal,
     );
