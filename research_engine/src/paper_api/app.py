@@ -823,6 +823,20 @@ def create_app(
 
         return {"phases": phases}
 
+    def _read_text_with_fallback(path: Path) -> str:
+        """Read text using common encodings used by experiment result files.
+
+        Different experiment phases wrote their result files with different
+        encodings. Try the common ones, and if none succeed, return a clear
+        error string instead of crashing with a UnicodeDecodeError.
+        """
+        for encoding in ("utf-8", "utf-8-sig", "utf-16-le", "utf-16-be", "utf-16", "latin-1"):
+            try:
+                return path.read_text(encoding=encoding)
+            except (UnicodeDecodeError, UnicodeError):
+                continue
+        return f"[Unable to decode file as text. First 64 bytes: {path.read_bytes()[:64]!r}]"
+
     @app.get("/api/research/experiments/{phase}/{filename}", tags=["research"])
     def research_experiment_file(phase: str, filename: str) -> dict:
         """Read one small, whitelisted experiment result file as raw UTF-8 text."""
@@ -850,7 +864,7 @@ def create_app(
         return {
             "phase": phase,
             "filename": filename,
-            "content": result_path.read_text(encoding="utf-8"),
+            "content": _read_text_with_fallback(result_path),
             "size_bytes": size_bytes,
         }
 
