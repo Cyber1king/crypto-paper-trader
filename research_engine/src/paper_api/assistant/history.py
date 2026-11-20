@@ -12,12 +12,29 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
 
-HISTORY_PATH = Path(__file__).resolve().parents[3] / "data" / "assistant_history.json"
+def history_path() -> Path:
+    """Return writable per-user storage for frozen builds and source storage otherwise."""
+    override = os.environ.get("CRYPTOPAPERLAB_DATA_DIR", "").strip()
+    if override:
+        return Path(override).expanduser() / "assistant_history.json"
+    if getattr(sys, "frozen", False):
+        if os.name == "nt":
+            local = os.environ.get("LOCALAPPDATA", "").strip()
+            root = Path(local).expanduser() if local else Path.home() / "AppData" / "Local"
+        else:
+            xdg = os.environ.get("XDG_DATA_HOME", "").strip()
+            root = Path(xdg).expanduser() if xdg else Path.home() / ".local" / "share"
+        return root / "CryptoPaperLab" / "assistant_history.json"
+    return Path(__file__).resolve().parents[3] / "data" / "assistant_history.json"
+
+
+HISTORY_PATH = history_path()
 MAX_MESSAGES = 200
 _HISTORY_LOCK = threading.Lock()
 
